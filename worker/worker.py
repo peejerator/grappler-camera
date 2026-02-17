@@ -5,12 +5,16 @@ from PCA9685 import PCA9685
 import socketio
 import base64
 from time import sleep
+from zeroconf import ServiceBrowser, Zeroconf
+import socket
+import argparse
 
-# Configuration
-CAMERA_ID = "camera1"
-SERVER_IP = "http://172.20.10.11:10000"
+# config
+CAMERA_ID = socket.gethostname()
+SERVER_IP = None  # discovered via mDNS
+SERVER_DISCOVERED = False
 
-# Servo stuff
+# servo stuff
 pwm = PCA9685(0x40, debug=False)
 pwm.setPWMFreq(50)
 
@@ -28,9 +32,9 @@ TILT_CENTER = 1500
 pan_pulse = PAN_CENTER
 tilt_pulse = TILT_CENTER
 
-#TESTING: center servos at the start
-#pwm.setServoPulse(PAN_CHANNEL, pan_pulse)
-#pwm.setServoPulse(TILT_CHANNEL, tilt_pulse)
+# center servos at the start
+pwm.setServoPulse(PAN_CHANNEL, pan_pulse)
+pwm.setServoPulse(TILT_CHANNEL, tilt_pulse)
 
 # Tracking parameters
 params = {
@@ -56,6 +60,48 @@ SKELETON = [
 
 # Socket.IO client
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
+
+def discover_server(wait_time):
+    """Discover server via mDNS and return its address"""
+    global SERVER_IP, SERVER_DISCOVERED
+    
+    discovered_server = {'ip': None}
+    
+    class ServerListener:
+        def add_service(self, zeroconf, service_type, name):
+            try:
+                info = zeroconf.get_service_info(service_type, name)
+                if info and info.properties.get(b'camera_server') == b'true':
+                    ip = socket.inet_ntoa(info.addresses[0])
+                    discovered_server['ip'] = f"http://{ip}:{info.port}"
+                    print(f"Server discovered: {discovered_server['ip']}")
+            except Exception as e:
+                print(f"Error discovering server: {e}")
+        
+        def remove_service(self, zeroconf, service_type, name):
+            pass
+        
+        def update_service(self, zeroconf, service_type, name):
+            pass
+    
+    try:
+        zeroconf = Zeroconf()
+        ServiceBrowser(zeroconf, "_grappler._tcp.local.", ServerListener())
+        
+        # wait up to 10 seconds for server discovery
+        for i in range(wait_time * 2):
+            if discovered_server['ip']:
+                SERVER_IP = discovered_server['ip']
+                SERVER_DISCOVERED = True
+                return
+            sleep(0.5)
+        
+        zeroconf.close()
+        
+        if not SERVER_IP:
+            print("Server not discovered via mDNS")
+    except Exception as e:
+        print(f"mDNS discovery failed: {e}")
 
 @sio.event
 def connect():
@@ -114,8 +160,8 @@ def tracking_loop():
         print("Error: Could not open camera")
         return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
     cap.set(cv2.CAP_PROP_FPS, 30)
     
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -141,8 +187,9 @@ def tracking_loop():
 
             frame_count += 1
             
-            if frame_count % 2 == 0:
-                results = model(frame, imgsz=320, verbose=False)
+            # Process every 3rd frame for performance
+            if frame_count % 3 == 0:
+                results = model(frame, imgsz=256, verbose=False)
                 last_results = results
             
             if last_results is None:
@@ -278,7 +325,7 @@ def tracking_loop():
 
 def emit_frame(frame):
     if sio.connected:
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
         frame_base64 = base64.b64encode(buffer).decode('utf-8')
         sio.emit('camera_frame', {
             'camera_id': CAMERA_ID,
@@ -288,6 +335,22 @@ def emit_frame(frame):
 
 if __name__ == "__main__":
     import threading
+    
+    argparser = argparse.ArgumentParser(description="Grappler Camera Worker")
+    argparser.add_argument('--server_ip', type=str, default=None, help='Server IP address')
+    argparser.add_argument('--mdns_wait', type=int, default=10, help='mDNS discovery wait time in seconds (default: 10). Only used if --server_ip is not provided.')
+    args = argparser.parse_args()
+
+    if args.server_ip:
+        SERVER_IP = args.server_ip
+    else:
+        # discover server via mDNS
+        print("Discovering server via mDNS...")
+        discover_server(args.mdns_wait)
+    
+    if not SERVER_IP:
+        print("Failed to discover server. Exiting.")
+        exit(1)
     
     # start tracking in background
     tracking_thread = threading.Thread(target=tracking_loop, daemon=True)
@@ -300,6 +363,6 @@ if __name__ == "__main__":
             sio.connect(SERVER_IP)
             sio.wait()
         except Exception as e:
-            #TODO: Handle exceptions better
+            #TODO: Handle exception printing better
             print(f"Connection failed: {e}, retrying in 5s...")
             sleep(5)
