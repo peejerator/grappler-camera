@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Camera Tracking Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Multi-Camera Tracking Control</h1>
+        
+        <div class="global-controls">
+            <h2>Global Controls</h2>
+            <div class="global-button-row">
+                <button class="btn-primary" onclick="centerAllServos()">Center All Servos</button>
+                <button class="btn-secondary" onclick="enableAllTracking()">Enable All Tracking</button>
+                <button class="btn-secondary" onclick="disableAllTracking()">Disable All Tracking</button>
+            </div>
+        </div>
+        
+        <div id="cameraGrid" class="camera-grid">
+            <div class="no-cameras">Waiting for cameras to connect...</div>
+        </div>
+    </div>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
