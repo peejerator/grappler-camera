@@ -8,6 +8,7 @@ from time import sleep
 from zeroconf import ServiceBrowser, Zeroconf
 import socket
 import argparse
+from enum import IntEnum, auto
 
 # config
 CAMERA_ID = socket.gethostname()
@@ -46,16 +47,66 @@ params = {
 }
 
 # Keypoint indices (COCO format)
-NOSE = 0
-LEFT_SHOULDER = 5
-RIGHT_SHOULDER = 6
+# NOSE = 0
+# LEFT_SHOULDER = 5
+# RIGHT_SHOULDER = 6
+
+class Keypoint(IntEnum):
+    NOSE = 0
+    LEFT_EYE = auto()
+    RIGHT_EYE = auto()
+    LEFT_EAR = auto()
+    RIGHT_EAR = auto()
+    LEFT_SHOULDER = auto()
+    RIGHT_SHOULDER = auto()
+    LEFT_ELBOW = auto()
+    RIGHT_ELBOW = auto()
+    LEFT_WRIST = auto()
+    RIGHT_WRIST = auto()
+    LEFT_HIP = auto()
+    RIGHT_HIP = auto()
+    LEFT_KNEE = auto()
+    RIGHT_KNEE = auto()
+    LEFT_ANKLE = auto()
+    RIGHT_ANKLE = auto()
+
+# Keypoint scores
+KEYPOINT_SCORES = {
+    Keypoint.NOSE: 0.8,
+    #Keypoint.LEFT_EYE: ,
+    #Keypoint.RIGHT_EYE: ,
+    #Keypoint.LEFT_EAR: ,
+    # Keypoint.RIGHT_EAR: ,
+    # Keypoint.LEFT_SHOULDER: ,
+    # Keypoint.RIGHT_SHOULDER: ,
+    # Keypoint.LEFT_ELBOW: ,
+    # Keypoint.RIGHT_ELBOW: ,
+    Keypoint.LEFT_WRIST: 0.9,
+    Keypoint.RIGHT_WRIST: 0.9,
+    # Keypoint.LEFT_HIP: ,
+    # Keypoint.RIGHT_HIP: ,
+    # Keypoint.LEFT_KNEE: ,
+    # Keypoint.RIGHT_KNEE: ,
+    # Keypoint.LEFT_ANKLE: ,
+    # Keypoint.RIGHT_ANKLE: 
+}
 
 SKELETON = [
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
-    (0, 1), (0, 2), (1, 3), (2, 4),
-    (0, 5), (0, 6)
+    (Keypoint.LEFT_SHOULDER, Keypoint.RIGHT_SHOULDER),
+    (Keypoint.LEFT_SHOULDER, Keypoint.LEFT_ELBOW),
+    (Keypoint.RIGHT_SHOULDER, Keypoint.RIGHT_ELBOW),
+    (Keypoint.LEFT_ELBOW, Keypoint.LEFT_WRIST),
+    (Keypoint.RIGHT_ELBOW, Keypoint.RIGHT_WRIST),
+    (Keypoint.LEFT_SHOULDER, Keypoint.LEFT_HIP),
+    (Keypoint.RIGHT_SHOULDER, Keypoint.RIGHT_HIP),
+    (Keypoint.LEFT_HIP, Keypoint.LEFT_KNEE),
+    (Keypoint.RIGHT_HIP, Keypoint.RIGHT_KNEE),
+    (Keypoint.LEFT_KNEE, Keypoint.LEFT_ANKLE),
+    (Keypoint.RIGHT_KNEE, Keypoint.RIGHT_ANKLE),
+    (Keypoint.NOSE, Keypoint.LEFT_EYE),
+    (Keypoint.NOSE, Keypoint.RIGHT_EYE),
+    (Keypoint.LEFT_EYE, Keypoint.LEFT_EAR),
+    (Keypoint.RIGHT_EYE, Keypoint.RIGHT_EAR)
 ]
 
 # Socket.IO client
@@ -137,8 +188,8 @@ def on_center_servo():
     print("Servos centered")
 
 def get_chest_position(keypoints):
-    left_shoulder = keypoints[LEFT_SHOULDER]
-    right_shoulder = keypoints[RIGHT_SHOULDER]
+    left_shoulder = keypoints[Keypoint.LEFT_SHOULDER]
+    right_shoulder = keypoints[Keypoint.RIGHT_SHOULDER]
     
     # Check if keypoints are valid (not at origin or very low confidence)
     def is_valid(kp):
@@ -201,6 +252,7 @@ def tracking_loop():
             for result in results:
                 boxes = result.boxes
                 kps_all = getattr(result.keypoints, "xy", None)
+                kps_conf_all = getattr(result.keypoints, "conf", None)
 
                 if boxes is None or kps_all is None:
                     continue
@@ -210,9 +262,19 @@ def tracking_loop():
                 else:
                     kps_all_np = kps_all
 
+                if kps_conf_all is not None:
+                    if hasattr(kps_conf_all, "cpu"):
+                        kps_conf_all_np = kps_conf_all.cpu().numpy()
+                    else:
+                        kps_conf_all_np = kps_conf_all
+                else:
+                    kps_conf_all_np = None
+
                 people_count = 0
                 person_centers_x = []
                 person_chests_y = []
+
+                total_score = 0
                 
                 for i, box in enumerate(boxes):
                     class_id = int(box.cls[0])
