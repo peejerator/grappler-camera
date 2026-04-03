@@ -202,6 +202,73 @@ def get_chest_position(keypoints):
         return (chest_x, chest_y)
     else:
         return None
+    
+def get_optimal_tracking_position(keypoints: np.ndarray) -> tuple[float, float] | None:
+    '''
+    Determine optimal tracking position based on keypoints.
+    If hips and shoulders are visible, take the midpoint between them as the center of the torso.
+    Else if hips are visible, use their midpoint.
+    Else if shoulders are visible, use their midpoint.
+    Else if wrists are visible, use them.
+    Else if face keypoints are visible, use the nose or midpoint between eyes.
+    Else if any other keypoint is visible, use it.
+
+    Returns (x, y) coordinates of optimal tracking point or None if no valid keypoints are found.
+    '''
+
+    # Check for shoulders and hips
+    left_shoulder = keypoints[Keypoint.LEFT_SHOULDER]
+    right_shoulder = keypoints[Keypoint.RIGHT_SHOULDER]
+    left_hip = keypoints[Keypoint.LEFT_HIP]
+    right_hip = keypoints[Keypoint.RIGHT_HIP]
+
+    def is_valid(kp):
+        return kp[0] > 0 and kp[1] > 0
+    
+    def average_kp(*args):
+        count = 0
+        x, y = 0, 0
+        for kp in args:
+            x += kp[0]
+            y += kp[1]
+            count += 1
+        if count == 0:
+            return None
+        return (x / count, y / count)
+    
+    # If hips and shoulders are valid, use their midpoint as torso center
+    if is_valid(left_shoulder) and is_valid(right_shoulder) and is_valid(left_hip) and is_valid(right_hip):
+        return average_kp(left_shoulder, right_shoulder, left_hip, right_hip)
+    
+    # If only hips are valid, use their midpoint
+    if is_valid(left_hip) and is_valid(right_hip):
+        return average_kp(left_hip, right_hip)
+    
+    # If only shoulders are valid, use their midpoint
+    if is_valid(left_shoulder) and is_valid(right_shoulder):
+        return average_kp(left_shoulder, right_shoulder)
+    
+    # If wrists are valid, use them
+    left_wrist = keypoints[Keypoint.LEFT_WRIST]
+    right_wrist = keypoints[Keypoint.RIGHT_WRIST]
+    if is_valid(left_wrist) and is_valid(right_wrist):
+        return average_kp(left_wrist, right_wrist)
+    
+    # If face keypoints are valid, use nose or midpoint between eyes
+    nose = keypoints[Keypoint.NOSE]
+    left_eye = keypoints[Keypoint.LEFT_EYE]
+    right_eye = keypoints[Keypoint.RIGHT_EYE]
+    if is_valid(nose):
+        return nose
+    
+    if is_valid(left_eye) and is_valid(right_eye):
+        return average_kp(left_eye, right_eye)
+    
+    # If any other keypoint is valid, use it
+    for kp in keypoints:
+        if is_valid(kp):
+            return kp
+    
 
 def tracking_loop():
     global pan_pulse, tilt_pulse
@@ -296,12 +363,13 @@ def tracking_loop():
                     # get chest position for tilting
                     if i < len(kps_all_np):
                         kps_xy = kps_all_np[i]
-                        chest_pos = get_chest_position(kps_xy)
+                        #chest_pos = get_chest_position(kps_xy)
+                        opt_pos = get_optimal_tracking_position(kps_xy)
                         
-                        if chest_pos is not None:
-                            person_chests_y.append(chest_pos[1])
+                        if opt_pos is not None:
+                            person_chests_y.append(opt_pos[1])
                             # draw chest circle for each person
-                            cv2.circle(frame, (int(chest_pos[0]), int(chest_pos[1])), 8, (255, 0, 255), -1)
+                            cv2.circle(frame, (int(opt_pos[0]), int(opt_pos[1])), 8, (255, 0, 255), -1)
                         else:
                             # if chest is not in frame default to the center of the bounding box
                             # TODO: make this smarter so that it tries to find the chest or make
