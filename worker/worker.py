@@ -291,7 +291,7 @@ def calculate_person_view_score(keypoint_confidences: np.ndarray | list[float] |
     if keypoint_confidences is None:
         return 0.0
 
-    weighted_conf_sum = 0.0
+    #weighted_conf_sum = 0.0
     weight_sum = 0.0
 
     for keypoint, weight in KEYPOINT_SCORES.items():
@@ -303,12 +303,13 @@ def calculate_person_view_score(keypoint_confidences: np.ndarray | list[float] |
         if confidence < KEYPOINT_CONFIDENCE_FLOOR:
             continue
 
-        weighted_conf_sum += confidence * weight
+        #weighted_conf_sum += confidence * weight
         weight_sum += weight
 
     if weight_sum == 0:
         return 0.0
-    return weighted_conf_sum / weight_sum
+    #return weighted_conf_sum / weight_sum
+    return weight_sum / sum(KEYPOINT_SCORES.values())
     
 
 def tracking_loop():
