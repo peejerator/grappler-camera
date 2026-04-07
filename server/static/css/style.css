@@ -242,6 +242,28 @@ button:active {
     flex: none;
     padding: 12px 24px;
 }
+.autofocus-controls {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+}
+.autofocus-control {
+    background: rgba(15, 52, 96, 0.45);
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    padding: 10px;
+}
+.autofocus-control label {
+    color: #00d9ff;
+    font-size: 13px;
+    font-weight: 500;
+    display: block;
+    margin-bottom: 8px;
+}
+.autofocus-control input[type="range"] {
+    width: 100%;
+}
 .no-cameras {
     text-align: center;
     padding: 40px;

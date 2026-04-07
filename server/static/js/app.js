@@ -199,6 +199,8 @@ socket.on('servo_move_rejected', (data) => {
 function renderCameras() {
     const grid = document.getElementById('cameraGrid');
     const cameraIds = Object.keys(cameraData);
+    updateAutoFocusButton();
+    syncAutoFocusControlUI();
 
     if (cameraIds.length === 0) {
         grid.innerHTML = '<div class="no-cameras">Waiting for cameras to connect...</div>';
@@ -210,7 +212,6 @@ function renderCameras() {
     }
 
     grid.classList.toggle('focus-mode', Boolean(focusedCameraId));
-    updateAutoFocusButton();
 
     grid.innerHTML = cameraIds.map(cameraId => `
         <div id="card_${cameraId}" class="camera-card ${cameraData[cameraId].connected ? '' : 'disconnected'} ${focusedCameraId && focusedCameraId !== cameraId ? 'hidden' : ''} ${focusedCameraId === cameraId ? 'focused' : ''}">
@@ -527,6 +528,48 @@ function updateAutoFocusButton() {
     button.classList.toggle('active', autoFocusEnabled);
 }
 
+function syncAutoFocusControlUI() {
+    const thresholdInput = document.getElementById('autoFocusThreshold');
+    const thresholdValue = document.getElementById('autoFocusThresholdValue');
+    const cooldownInput = document.getElementById('autoFocusCooldown');
+    const cooldownValue = document.getElementById('autoFocusCooldownValue');
+
+    if (thresholdInput) {
+        thresholdInput.value = autoFocusSettings.scoreThreshold.toFixed(2);
+    }
+    if (thresholdValue) {
+        thresholdValue.textContent = autoFocusSettings.scoreThreshold.toFixed(2);
+    }
+    if (cooldownInput) {
+        cooldownInput.value = (autoFocusSettings.switchCooldownMs / 1000).toFixed(1);
+    }
+    if (cooldownValue) {
+        cooldownValue.textContent = `${(autoFocusSettings.switchCooldownMs / 1000).toFixed(1)}s`;
+    }
+}
+
+function updateAutoFocusThreshold(rawValue) {
+    const parsed = parseFloat(rawValue);
+    if (!Number.isFinite(parsed)) {
+        return;
+    }
+    autoFocusSettings.scoreThreshold = Math.max(0, Math.min(1, parsed));
+    syncAutoFocusControlUI();
+    if (autoFocusEnabled) {
+        evaluateAutoFocus(true);
+    }
+}
+
+function updateAutoFocusCooldown(rawValue) {
+    const parsedSeconds = parseFloat(rawValue);
+    if (!Number.isFinite(parsedSeconds)) {
+        return;
+    }
+    const clampedSeconds = Math.max(0, Math.min(10, parsedSeconds));
+    autoFocusSettings.switchCooldownMs = Math.round(clampedSeconds * 1000);
+    syncAutoFocusControlUI();
+}
+
 function toggleAutoFocus() {
     autoFocusEnabled = !autoFocusEnabled;
     if (autoFocusEnabled) {
@@ -685,3 +728,5 @@ function setAllDrawStats(enabled) {
         updateParam(cameraId, 'draw_stats', enabled);
     });
 }
+
+syncAutoFocusControlUI();
