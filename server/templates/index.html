@@ -17,6 +17,23 @@
                 <button class="btn-primary" onclick="centerAllServos()">Center All Servos</button>
                 <button class="btn-secondary" onclick="enableAllTracking()">Enable All Tracking</button>
                 <button class="btn-secondary" onclick="disableAllTracking()">Disable All Tracking</button>
+                <button id="autoFocusButton" class="btn-secondary" onclick="toggleAutoFocus()">Auto-Focus Best Score: Off</button>
+                <button class="btn-secondary" onclick="setAllDrawSkeleton(true)">Show All Skeletons</button>
+                <button class="btn-secondary" onclick="setAllDrawSkeleton(false)">Hide All Skeletons</button>
+                <button class="btn-secondary" onclick="setAllDrawStats(true)">Show All Stats</button>
+                <button class="btn-secondary" onclick="setAllDrawStats(false)">Hide All Stats</button>
+            </div>
+            <div class="autofocus-controls">
+                <div class="autofocus-control">
+                    <label for="autoFocusThreshold">Switch Threshold: <span id="autoFocusThresholdValue">0.10</span></label>
+                    <input id="autoFocusThreshold" type="range" min="0" max="1" step="0.01" value="0.10"
+                           oninput="updateAutoFocusThreshold(this.value)">
+                </div>
+                <div class="autofocus-control">
+                    <label for="autoFocusCooldown">Switch Cooldown: <span id="autoFocusCooldownValue">3.0s</span></label>
+                    <input id="autoFocusCooldown" type="range" min="0" max="10" step="0.5" value="3"
+                           oninput="updateAutoFocusCooldown(this.value)">
+                </div>
             </div>
         </div>
         

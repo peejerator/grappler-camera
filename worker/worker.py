@@ -43,7 +43,9 @@ params = {
     'tilt_speed': 30,
     'deadzone': 0.1,
     'confidence_threshold': 0.80,
-    'tracking_enabled': False
+    'tracking_enabled': False,
+    'draw_skeleton': True,
+    'draw_stats': True
 }
 
 # Keypoint indices (COCO format)
@@ -73,23 +75,26 @@ class Keypoint(IntEnum):
 # Keypoint scores
 KEYPOINT_SCORES = {
     Keypoint.NOSE: 0.8,
-    #Keypoint.LEFT_EYE: ,
-    #Keypoint.RIGHT_EYE: ,
-    #Keypoint.LEFT_EAR: ,
-    # Keypoint.RIGHT_EAR: ,
-    # Keypoint.LEFT_SHOULDER: ,
-    # Keypoint.RIGHT_SHOULDER: ,
-    # Keypoint.LEFT_ELBOW: ,
-    # Keypoint.RIGHT_ELBOW: ,
+    Keypoint.LEFT_EYE: 0,
+    Keypoint.RIGHT_EYE: 0,
+    Keypoint.LEFT_EAR: 0,
+    Keypoint.RIGHT_EAR: 0,
+    Keypoint.LEFT_SHOULDER: 0,
+    Keypoint.RIGHT_SHOULDER: 0,
+    Keypoint.LEFT_ELBOW: 0,
+    Keypoint.RIGHT_ELBOW: 0,
     Keypoint.LEFT_WRIST: 0.9,
     Keypoint.RIGHT_WRIST: 0.9,
-    # Keypoint.LEFT_HIP: ,
-    # Keypoint.RIGHT_HIP: ,
-    # Keypoint.LEFT_KNEE: ,
-    # Keypoint.RIGHT_KNEE: ,
-    # Keypoint.LEFT_ANKLE: ,
-    # Keypoint.RIGHT_ANKLE: 
+    Keypoint.LEFT_HIP: 0,
+    Keypoint.RIGHT_HIP: 0,
+    Keypoint.LEFT_KNEE: 0,
+    Keypoint.RIGHT_KNEE: 0,
+    Keypoint.LEFT_ANKLE: 0,
+    Keypoint.RIGHT_ANKLE: 0
 }
+
+KEYPOINT_CONFIDENCE_FLOOR = 0.30
+KEYPOINT_DRAW_CONFIDENCE_THRESHOLD = 0.5
 
 SKELETON = [
     (Keypoint.LEFT_SHOULDER, Keypoint.RIGHT_SHOULDER),
@@ -176,6 +181,10 @@ def on_update_params(data):
         params['confidence_threshold'] = float(data['confidence_threshold'])
     if 'tracking_enabled' in data:
         params['tracking_enabled'] = bool(data['tracking_enabled'])
+    if 'draw_skeleton' in data:
+        params['draw_skeleton'] = bool(data['draw_skeleton'])
+    if 'draw_stats' in data:
+        params['draw_stats'] = bool(data['draw_stats'])
     print(f"Params updated: {params}")
 
 @sio.on(f'center_servo_{CAMERA_ID}')
@@ -186,6 +195,20 @@ def on_center_servo():
     pwm.setServoPulse(PAN_CHANNEL, PAN_CENTER)
     pwm.setServoPulse(TILT_CHANNEL, TILT_CENTER)
     print("Servos centered")
+
+@sio.on(f'move_servo_{CAMERA_ID}')
+def on_move_servo(data):
+    global pan_pulse, tilt_pulse
+    if params.get('tracking_enabled'):
+        print("Ignoring manual servo command while tracking is enabled")
+        return
+
+    params['tracking_enabled'] = False
+    pan_pulse = data['pan']
+    tilt_pulse = data['tilt']
+    pwm.setServoPulse(PAN_CHANNEL, pan_pulse)
+    pwm.setServoPulse(TILT_CHANNEL, tilt_pulse)
+    print(f"Servos moved to: pan={pan_pulse}, tilt={tilt_pulse}")
 
 def get_chest_position(keypoints):
     left_shoulder = keypoints[Keypoint.LEFT_SHOULDER]
@@ -202,6 +225,99 @@ def get_chest_position(keypoints):
         return (chest_x, chest_y)
     else:
         return None
+    
+def get_optimal_tracking_position(keypoints: np.ndarray) -> tuple[float, float] | None:
+    '''
+    Determine optimal tracking position based on keypoints.
+    If hips and shoulders are visible, take the midpoint between them as the center of the torso.
+    Else if hips are visible, use their midpoint.
+    Else if shoulders are visible, use their midpoint.
+    Else if wrists are visible, use them.
+    Else if face keypoints are visible, use the nose or midpoint between eyes.
+    Else if any other keypoint is visible, use it.
+
+    Returns (x, y) coordinates of optimal tracking point or None if no valid keypoints are found.
+    '''
+
+    # Check for shoulders and hips
+    left_shoulder = keypoints[Keypoint.LEFT_SHOULDER]
+    right_shoulder = keypoints[Keypoint.RIGHT_SHOULDER]
+    left_hip = keypoints[Keypoint.LEFT_HIP]
+    right_hip = keypoints[Keypoint.RIGHT_HIP]
+
+    def is_valid(kp):
+        return kp[0] > 0 and kp[1] > 0
+    
+    def average_kp(*args):
+        count = 0
+        x, y = 0, 0
+        for kp in args:
+            x += kp[0]
+            y += kp[1]
+            count += 1
+        if count == 0:
+            return None
+        return (x / count, y / count)
+    
+    # If hips and shoulders are valid, use their midpoint as torso center
+    if is_valid(left_shoulder) and is_valid(right_shoulder) and is_valid(left_hip) and is_valid(right_hip):
+        return average_kp(left_shoulder, right_shoulder, left_hip, right_hip)
+    
+    # If only hips are valid, use their midpoint
+    if is_valid(left_hip) and is_valid(right_hip):
+        return average_kp(left_hip, right_hip)
+    
+    # If only shoulders are valid, use their midpoint
+    if is_valid(left_shoulder) and is_valid(right_shoulder):
+        return average_kp(left_shoulder, right_shoulder)
+    
+    # If wrists are valid, use them
+    left_wrist = keypoints[Keypoint.LEFT_WRIST]
+    right_wrist = keypoints[Keypoint.RIGHT_WRIST]
+    if is_valid(left_wrist) and is_valid(right_wrist):
+        return average_kp(left_wrist, right_wrist)
+    
+    # If face keypoints are valid, use nose or midpoint between eyes
+    nose = keypoints[Keypoint.NOSE]
+    left_eye = keypoints[Keypoint.LEFT_EYE]
+    right_eye = keypoints[Keypoint.RIGHT_EYE]
+    if is_valid(nose):
+        return nose
+    
+    if is_valid(left_eye) and is_valid(right_eye):
+        return average_kp(left_eye, right_eye)
+    
+    # If any other keypoint is valid, use it
+    for kp in keypoints:
+        if is_valid(kp):
+            return kp
+
+
+def calculate_person_view_score(keypoint_confidences: np.ndarray | list[float] | None) -> float:
+    """Compute weighted pose visibility score for one person in range [0.0, 1.0]."""
+    if keypoint_confidences is None:
+        return 0.0
+
+    #weighted_conf_sum = 0.0
+    weight_sum = 0.0
+
+    for keypoint, weight in KEYPOINT_SCORES.items():
+        idx = int(keypoint)
+        if idx >= len(keypoint_confidences):
+            continue
+
+        confidence = float(keypoint_confidences[idx])
+        if confidence < KEYPOINT_CONFIDENCE_FLOOR:
+            continue
+
+        #weighted_conf_sum += confidence * weight
+        weight_sum += weight
+
+    if weight_sum == 0:
+        return 0.0
+    #return weighted_conf_sum / weight_sum
+    return weight_sum / sum(KEYPOINT_SCORES.values())
+    
 
 def tracking_loop():
     global pan_pulse, tilt_pulse
@@ -228,6 +344,7 @@ def tracking_loop():
     
     frame_count = 0
     last_results = None
+    camera_view_score = 0.0
     
     try:
         while True:
@@ -237,6 +354,7 @@ def tracking_loop():
                 break
 
             frame_count += 1
+            camera_view_score = 0.0
             
             # Process every 3rd frame for performance
             if frame_count % 3 == 0:
@@ -244,7 +362,7 @@ def tracking_loop():
                 last_results = results
             
             if last_results is None:
-                emit_frame(frame)
+                emit_frame(frame, camera_view_score)
                 continue
                 
             results = last_results
@@ -272,9 +390,8 @@ def tracking_loop():
 
                 people_count = 0
                 person_centers_x = []
-                person_chests_y = []
-
-                total_score = 0
+                person_centers_y = []
+                person_view_scores = []
                 
                 for i, box in enumerate(boxes):
                     class_id = int(box.cls[0])
@@ -288,6 +405,11 @@ def tracking_loop():
 
                     people_count += 1
 
+                    if kps_conf_all_np is not None and i < len(kps_conf_all_np):
+                        person_view_scores.append(calculate_person_view_score(kps_conf_all_np[i]))
+                    else:
+                        person_view_scores.append(0.0)
+
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
                     # store center x of bounding box for panning
@@ -296,40 +418,47 @@ def tracking_loop():
                     # get chest position for tilting
                     if i < len(kps_all_np):
                         kps_xy = kps_all_np[i]
-                        chest_pos = get_chest_position(kps_xy)
+                        #chest_pos = get_chest_position(kps_xy)
+                        opt_pos = get_optimal_tracking_position(kps_xy)
                         
-                        if chest_pos is not None:
-                            person_chests_y.append(chest_pos[1])
-                            # draw chest circle for each person
-                            cv2.circle(frame, (int(chest_pos[0]), int(chest_pos[1])), 8, (255, 0, 255), -1)
+                        if opt_pos is not None:
+                            person_centers_y.append(opt_pos[1])
+                            if params.get('draw_skeleton', True):
+                                # draw chest circle for each person
+                                cv2.circle(frame, (int(opt_pos[0]), int(opt_pos[1])), 8, (255, 0, 255), -1)
                         else:
                             # if chest is not in frame default to the center of the bounding box
                             # TODO: make this smarter so that it tries to find the chest or make
                             #       it dynamic/configurable
-                            person_chests_y.append((y1 + y2) / 2)
+                            person_centers_y.append((y1 + y2) / 2)
                     else:
                         # Fallback to bounding box center
-                        person_chests_y.append((y1 + y2) / 2)
+                        person_centers_y.append((y1 + y2) / 2)
                     
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(
-                        frame, f"Person {conf:.2f}", (x1, y1 - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
-                    )
+                    if params.get('draw_skeleton', True):
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(
+                            frame, f"Person {conf:.2f}", (x1, y1 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+                        )
 
                     if i >= len(kps_all_np):
                         continue
                     kps_xy = kps_all_np[i]
+                    kps_conf = kps_conf_all_np[i] if kps_conf_all_np is not None else None
 
-                    for j, (kx, ky) in enumerate(kps_xy):
-                        x, y = int(kx), int(ky)
-                        cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
+                    if params.get('draw_skeleton', True):
+                        for j, (kx, ky) in enumerate(kps_xy):
+                            x, y = int(kx), int(ky)
+                            draw_conf = float(kps_conf[j]) if kps_conf is not None else 1.0
+                            if j < len(Keypoint) and draw_conf >= KEYPOINT_CONFIDENCE_FLOOR:
+                                cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
 
-                    for a, b in SKELETON:
-                        if a < len(kps_xy) and b < len(kps_xy):
-                            xA, yA = map(int, kps_xy[a])
-                            xB, yB = map(int, kps_xy[b])
-                            cv2.line(frame, (xA, yA), (xB, yB), (255, 0, 0), 2)
+                        for a, b in SKELETON:
+                            if a < len(kps_xy) and b < len(kps_xy) and (kps_conf is None or (kps_conf[a] >= KEYPOINT_CONFIDENCE_FLOOR and kps_conf[b] >= KEYPOINT_CONFIDENCE_FLOOR)):
+                                xA, yA = map(int, kps_xy[a])
+                                xB, yB = map(int, kps_xy[b])
+                                cv2.line(frame, (xA, yA), (xB, yB), (255, 0, 0), 2)
 
                 # servo tracking
                 if len(person_centers_x) > 0 and params['tracking_enabled']:
@@ -337,10 +466,11 @@ def tracking_loop():
                     target_x = sum(person_centers_x) / len(person_centers_x)
                     
                     # target y: average chest position
-                    target_y = sum(person_chests_y) / len(person_chests_y)
+                    target_y = sum(person_centers_y) / len(person_centers_y)
                     
-                    # draw target point
-                    cv2.circle(frame, (int(target_x), int(target_y)), 12, (0, 255, 255), 2)
+                    if params.get('draw_stats', True):
+                        # draw target point
+                        cv2.circle(frame, (int(target_x), int(target_y)), 12, (0, 255, 255), 2)
                     
                     # get current offset from target point [-1, 1]
                     offset_x = (target_x - frame_center_x) / frame_center_x
@@ -360,24 +490,30 @@ def tracking_loop():
 
                 pan_angle = (pan_pulse - PAN_MIN) / (PAN_MAX - PAN_MIN) * 180
                 tilt_angle = (tilt_pulse - TILT_MIN) / (TILT_MAX - TILT_MIN) * 180
+                camera_view_score = sum(person_view_scores) / len(person_view_scores) if person_view_scores else 0.0
                 
-                status = "ON" if params['tracking_enabled'] else "OFF"
-                cv2.putText(
-                    frame, f"{CAMERA_ID} | People: {people_count} | Tracking: {status}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-                )
-                cv2.putText(
-                    frame, f"Pan: {pan_angle:.0f} | Tilt: {tilt_angle:.0f}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-                )
-                
-                # crosshair at center of frame
-                cv2.line(frame, (int(frame_center_x) - 20, int(frame_center_y)), 
-                         (int(frame_center_x) + 20, int(frame_center_y)), (255, 255, 0), 1)
-                cv2.line(frame, (int(frame_center_x), int(frame_center_y) - 20), 
-                         (int(frame_center_x), int(frame_center_y) + 20), (255, 255, 0), 1)
+                if params.get('draw_stats', True):
+                    status = "ON" if params['tracking_enabled'] else "OFF"
+                    cv2.putText(
+                        frame, f"{CAMERA_ID} | People: {people_count} | Tracking: {status}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
+                    cv2.putText(
+                        frame, f"Pan: {pan_angle:.0f} | Tilt: {tilt_angle:.0f}", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
+                    cv2.putText(
+                        frame, f"View Score: {camera_view_score * 100:.1f}%", (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
 
-            emit_frame(frame)
+                    # crosshair at center of frame
+                    cv2.line(frame, (int(frame_center_x) - 20, int(frame_center_y)), 
+                             (int(frame_center_x) + 20, int(frame_center_y)), (255, 255, 0), 1)
+                    cv2.line(frame, (int(frame_center_x), int(frame_center_y) - 20), 
+                             (int(frame_center_x), int(frame_center_y) + 20), (255, 255, 0), 1)
+
+            emit_frame(frame, camera_view_score)
 
     finally:
         cap.release()
@@ -385,14 +521,15 @@ def tracking_loop():
         pwm.setServoPulse(TILT_CHANNEL, TILT_CENTER)
         print("Pose detection stopped.")
 
-def emit_frame(frame):
+def emit_frame(frame, view_score=0.0):
     if sio.connected:
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
         frame_base64 = base64.b64encode(buffer).decode('utf-8')
         sio.emit('camera_frame', {
             'camera_id': CAMERA_ID,
             'image': frame_base64,
-            'params': params
+            'params': params,
+            'view_score': float(view_score)
         })
 
 if __name__ == "__main__":
