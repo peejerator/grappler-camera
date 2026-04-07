@@ -92,6 +92,7 @@ KEYPOINT_SCORES = {
 }
 
 KEYPOINT_CONFIDENCE_FLOOR = 0.30
+KEYPOINT_DRAW_CONFIDENCE_THRESHOLD = 0.5
 
 SKELETON = [
     (Keypoint.LEFT_SHOULDER, Keypoint.RIGHT_SHOULDER),
@@ -434,13 +435,16 @@ def tracking_loop():
                     if i >= len(kps_all_np):
                         continue
                     kps_xy = kps_all_np[i]
+                    kps_conf = kps_conf_all_np[i] if kps_conf_all_np is not None else None
 
                     for j, (kx, ky) in enumerate(kps_xy):
                         x, y = int(kx), int(ky)
-                        cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
+                        draw_conf = float(kps_conf[j]) if kps_conf is not None else 1.0
+                        if j < len(Keypoint) and draw_conf >= KEYPOINT_DRAW_CONFIDENCE_THRESHOLD:
+                            cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
 
                     for a, b in SKELETON:
-                        if a < len(kps_xy) and b < len(kps_xy):
+                        if a < len(kps_xy) and b < len(kps_xy) and (kps_conf is None or (kps_conf[a] >= KEYPOINT_DRAW_CONFIDENCE_THRESHOLD and kps_conf[b] >= KEYPOINT_DRAW_CONFIDENCE_THRESHOLD)):
                             xA, yA = map(int, kps_xy[a])
                             xB, yB = map(int, kps_xy[b])
                             cv2.line(frame, (xA, yA), (xB, yB), (255, 0, 0), 2)
