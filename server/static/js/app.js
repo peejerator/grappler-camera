@@ -14,9 +14,24 @@ const defaultParams = {
 };
 
 const servoDefaults = {
-    pan: 1500,
-    tilt: 1500
+    pan: 90,
+    tilt: 90
 };
+
+const servoPulseMin = 900;
+const servoPulseMax = 2100;
+const servoAngleMin = 0;
+const servoAngleMax = 180;
+
+function degreesToPulse(degrees) {
+    const clamped = Math.max(servoAngleMin, Math.min(servoAngleMax, degrees));
+    return Math.round(servoPulseMin + ((clamped - servoAngleMin) / (servoAngleMax - servoAngleMin)) * (servoPulseMax - servoPulseMin));
+}
+
+function pulseToDegrees(pulse) {
+    const clamped = Math.max(servoPulseMin, Math.min(servoPulseMax, pulse));
+    return Math.round(((clamped - servoPulseMin) / (servoPulseMax - servoPulseMin)) * (servoAngleMax - servoAngleMin) + servoAngleMin);
+}
 
 socket.on('connect', () => {
     console.log('Connected to server');
@@ -39,6 +54,9 @@ socket.on('camera_list', (cameras) => {
             cameraData[cameraId].connected = camera.connected;
             cameraData[cameraId].params = camera.params || cameraData[cameraId].params;
             cameraData[cameraId].recording = camera.recording || false;
+            if (!cameraData[cameraId].servo) {
+                cameraData[cameraId].servo = { ...servoDefaults };
+            }
             if (!cameraData[cameraId].videoSize) {
                 cameraData[cameraId].videoSize = getSavedVideoSize(cameraId);
             }
@@ -145,10 +163,13 @@ socket.on('servo_moved', (data) => {
         return;
     }
 
-    cameraData[cameraId].servo.pan = data.pan;
-    cameraData[cameraId].servo.tilt = data.tilt;
-    updateServoPreview(cameraId, 'pan', data.pan);
-    updateServoPreview(cameraId, 'tilt', data.tilt);
+    const panDegrees = pulseToDegrees(data.pan);
+    const tiltDegrees = pulseToDegrees(data.tilt);
+
+    cameraData[cameraId].servo.pan = panDegrees;
+    cameraData[cameraId].servo.tilt = tiltDegrees;
+    updateServoPreview(cameraId, 'pan', panDegrees);
+    updateServoPreview(cameraId, 'tilt', tiltDegrees);
 });
 
 socket.on('servo_move_rejected', (data) => {
@@ -202,16 +223,16 @@ function renderCameras() {
                 </div>
 
                 <div class="control-group">
-                    <label>Manual Pan Pulse: <span id="manualPanValue_${cameraId}">${cameraData[cameraId].servo.pan}</span></label>
-                    <input type="range" id="manualPan_${cameraId}" min="900" max="2100" step="1"
+                    <label>Manual Pan Degrees: <span id="manualPanValue_${cameraId}">${cameraData[cameraId].servo.pan}°</span></label>
+                    <input type="range" id="manualPan_${cameraId}" min="0" max="180" step="1"
                            value="${cameraData[cameraId].servo.pan}"
                            ${cameraData[cameraId].params.tracking_enabled ? 'disabled' : ''}
                            oninput="updateServoPreview('${cameraId}', 'pan', parseInt(this.value, 10))">
                 </div>
 
                 <div class="control-group">
-                    <label>Manual Tilt Pulse: <span id="manualTiltValue_${cameraId}">${cameraData[cameraId].servo.tilt}</span></label>
-                    <input type="range" id="manualTilt_${cameraId}" min="900" max="2100" step="1"
+                    <label>Manual Tilt Degrees: <span id="manualTiltValue_${cameraId}">${cameraData[cameraId].servo.tilt}°</span></label>
+                    <input type="range" id="manualTilt_${cameraId}" min="0" max="180" step="1"
                            value="${cameraData[cameraId].servo.tilt}"
                            ${cameraData[cameraId].params.tracking_enabled ? 'disabled' : ''}
                            oninput="updateServoPreview('${cameraId}', 'tilt', parseInt(this.value, 10))">
@@ -448,7 +469,7 @@ function updateServoPreview(cameraId, axis, value) {
 
     const valueElement = document.getElementById(`manual${axis === 'pan' ? 'Pan' : 'Tilt'}Value_${cameraId}`);
     if (valueElement) {
-        valueElement.textContent = value;
+        valueElement.textContent = `${value}°`;
     }
 }
 
@@ -465,8 +486,8 @@ function moveServo(cameraId) {
 
     socket.emit('move_servo', {
         camera_id: cameraId,
-        pan: cameraData[cameraId].servo.pan,
-        tilt: cameraData[cameraId].servo.tilt
+        pan: degreesToPulse(cameraData[cameraId].servo.pan),
+        tilt: degreesToPulse(cameraData[cameraId].servo.tilt)
     });
 }
 
