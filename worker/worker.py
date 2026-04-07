@@ -91,6 +91,8 @@ KEYPOINT_SCORES = {
     # Keypoint.RIGHT_ANKLE: 
 }
 
+KEYPOINT_CONFIDENCE_FLOOR = 0.30
+
 SKELETON = [
     (Keypoint.LEFT_SHOULDER, Keypoint.RIGHT_SHOULDER),
     (Keypoint.LEFT_SHOULDER, Keypoint.LEFT_ELBOW),
@@ -282,6 +284,31 @@ def get_optimal_tracking_position(keypoints: np.ndarray) -> tuple[float, float] 
     for kp in keypoints:
         if is_valid(kp):
             return kp
+
+
+def calculate_person_view_score(keypoint_confidences: np.ndarray | list[float] | None) -> float:
+    """Compute weighted pose visibility score for one person in range [0.0, 1.0]."""
+    if keypoint_confidences is None:
+        return 0.0
+
+    weighted_conf_sum = 0.0
+    weight_sum = 0.0
+
+    for keypoint, weight in KEYPOINT_SCORES.items():
+        idx = int(keypoint)
+        if idx >= len(keypoint_confidences):
+            continue
+
+        confidence = float(keypoint_confidences[idx])
+        if confidence < KEYPOINT_CONFIDENCE_FLOOR:
+            continue
+
+        weighted_conf_sum += confidence * weight
+        weight_sum += weight
+
+    if weight_sum == 0:
+        return 0.0
+    return weighted_conf_sum / weight_sum
     
 
 def tracking_loop():
@@ -354,8 +381,7 @@ def tracking_loop():
                 people_count = 0
                 person_centers_x = []
                 person_centers_y = []
-
-                total_score = 0
+                person_view_scores = []
                 
                 for i, box in enumerate(boxes):
                     class_id = int(box.cls[0])
@@ -368,6 +394,11 @@ def tracking_loop():
                         continue
 
                     people_count += 1
+
+                    if kps_conf_all_np is not None and i < len(kps_conf_all_np):
+                        person_view_scores.append(calculate_person_view_score(kps_conf_all_np[i]))
+                    else:
+                        person_view_scores.append(0.0)
 
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
@@ -442,6 +473,7 @@ def tracking_loop():
 
                 pan_angle = (pan_pulse - PAN_MIN) / (PAN_MAX - PAN_MIN) * 180
                 tilt_angle = (tilt_pulse - TILT_MIN) / (TILT_MAX - TILT_MIN) * 180
+                camera_view_score = sum(person_view_scores) / len(person_view_scores) if person_view_scores else 0.0
                 
                 status = "ON" if params['tracking_enabled'] else "OFF"
                 cv2.putText(
@@ -450,6 +482,10 @@ def tracking_loop():
                 )
                 cv2.putText(
                     frame, f"Pan: {pan_angle:.0f} | Tilt: {tilt_angle:.0f}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                )
+                cv2.putText(
+                    frame, f"View Score: {camera_view_score * 100:.1f}%", (10, 90),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
                 )
                 
