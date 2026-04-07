@@ -2,10 +2,13 @@ const socket = io();
 const cameraData = {};
 const fpsCounters = {};
 const resizeObservers = {};
+const resizeSaveTimers = {};
 let focusedCameraId = null;
 let autoFocusEnabled = true;
 let lastAutoFocusSwitchAt = 0;
 const videoSizeStorageKey = 'cameraVideoSizes';
+const defaultVideoAspectRatio = 16 / 9;
+const resizeSaveDebounceMs = 120;
 const autoFocusSettings = {
     scoreThreshold: 0.10,
     switchCooldownMs: 3000
@@ -50,10 +53,12 @@ socket.on('camera_list', (cameras) => {
     cameras.forEach(camera => {
         const cameraId = camera.camera_id;
         if (!cameraData[cameraId]) {
+            const savedVideoSize = getSavedVideoSize(cameraId);
             cameraData[cameraId] = {
                 connected: camera.connected,
                 params: { ...defaultParams, ...(camera.params || {}) },
-                videoSize: getSavedVideoSize(cameraId),
+                videoSize: savedVideoSize,
+                aspectRatio: getSavedVideoAspectRatio(cameraId),
                 recording: camera.recording || false,
                 servo: { ...servoDefaults },
                 viewScore: Number.isFinite(camera.view_score) ? camera.view_score : 0
@@ -69,6 +74,9 @@ socket.on('camera_list', (cameras) => {
             }
             if (!cameraData[cameraId].videoSize) {
                 cameraData[cameraId].videoSize = getSavedVideoSize(cameraId);
+            }
+            if (!cameraData[cameraId].aspectRatio) {
+                cameraData[cameraId].aspectRatio = getSavedVideoAspectRatio(cameraId);
             }
         }
     });
@@ -225,7 +233,7 @@ function renderCameras() {
 
             <div class="video-container">
                 <div id="videoWrap_${cameraId}" class="video-resize" style="${getVideoSizeStyle(cameraId)}">
-                    <img id="video_${cameraId}" alt="${cameraId} feed">
+                    <img id="video_${cameraId}" alt="${cameraId} feed" onload="handleVideoMetadataLoad('${cameraId}', this)">
                 </div>
                 <div class="fps-counter">FPS: <span id="fps_${cameraId}">0</span></div>
             </div>
@@ -340,22 +348,114 @@ function renderCameras() {
 
 function getVideoSizeStyle(cameraId) {
     const size = cameraData[cameraId]?.videoSize;
-    if (!size || size.width <= 0 || size.height <= 0) {
-        return '';
+    const styles = [];
+    const aspectRatio = getCameraAspectRatio(cameraId);
+    styles.push(`--video-aspect-ratio:${aspectRatio.toFixed(6)};`);
+    if (focusedCameraId === cameraId) {
+        styles.push('width:100%;');
+        return styles.join('');
     }
-    return `width:${size.width}px;height:${size.height}px;`;
+    if (size && size.width > 0) {
+        styles.push(`width:${size.width}px;`);
+    }
+    return styles.join('');
+}
+
+function handleVideoMetadataLoad(cameraId, img) {
+    if (!cameraData[cameraId] || !img || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+        return;
+    }
+
+    const discoveredRatio = img.naturalWidth / img.naturalHeight;
+    if (!isValidAspectRatio(discoveredRatio)) {
+        return;
+    }
+
+    const previousRatio = getCameraAspectRatio(cameraId);
+    if (Math.abs(previousRatio - discoveredRatio) < 0.01) {
+        return;
+    }
+
+    cameraData[cameraId].aspectRatio = discoveredRatio;
+    const wrap = document.getElementById('videoWrap_' + cameraId);
+    if (wrap) {
+        wrap.style.setProperty('--video-aspect-ratio', discoveredRatio.toFixed(6));
+    }
+
+    if (cameraData[cameraId].videoSize?.width > 0) {
+        cameraData[cameraId].videoSize.height = Math.round(cameraData[cameraId].videoSize.width / discoveredRatio);
+        queueSaveVideoSize(cameraId, cameraData[cameraId].videoSize);
+    }
+}
+
+function parseSavedVideoSizeMap() {
+    const stored = localStorage.getItem(videoSizeStorageKey);
+    if (!stored) {
+        return null;
+    }
+    const map = JSON.parse(stored);
+    if (!map || typeof map !== 'object') {
+        return null;
+    }
+    return map;
+}
+
+function sanitizeVideoSize(rawSize) {
+    if (!rawSize || !Number.isFinite(rawSize.width) || !Number.isFinite(rawSize.height)) {
+        return null;
+    }
+
+    const width = Math.round(rawSize.width);
+    const height = Math.round(rawSize.height);
+    if (width <= 0 || height <= 0) {
+        return null;
+    }
+
+    return { width, height };
+}
+
+function isValidAspectRatio(aspectRatio) {
+    return Number.isFinite(aspectRatio) && aspectRatio > 0.2 && aspectRatio < 5;
+}
+
+function getCameraAspectRatio(cameraId) {
+    const saved = cameraData[cameraId]?.aspectRatio;
+    if (isValidAspectRatio(saved)) {
+        return saved;
+    }
+    return defaultVideoAspectRatio;
+}
+
+function getSavedVideoAspectRatio(cameraId) {
+    try {
+        const map = parseSavedVideoSizeMap();
+        const size = map?.[cameraId];
+        if (!size) {
+            return defaultVideoAspectRatio;
+        }
+
+        if (isValidAspectRatio(size.aspectRatio)) {
+            return size.aspectRatio;
+        }
+
+        const normalizedSize = sanitizeVideoSize(size);
+        if (!normalizedSize) {
+            return defaultVideoAspectRatio;
+        }
+
+        const inferredRatio = normalizedSize.width / normalizedSize.height;
+        return isValidAspectRatio(inferredRatio) ? inferredRatio : defaultVideoAspectRatio;
+    } catch (err) {
+        console.warn('Failed to load saved video aspect ratio', err);
+        return defaultVideoAspectRatio;
+    }
 }
 
 function getSavedVideoSize(cameraId) {
     try {
-        const stored = localStorage.getItem(videoSizeStorageKey);
-        if (!stored) return null;
-        const map = JSON.parse(stored);
+        const map = parseSavedVideoSizeMap();
         const size = map?.[cameraId];
-        if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height)) {
-            return null;
-        }
-        return { width: size.width, height: size.height };
+        return sanitizeVideoSize(size);
     } catch (err) {
         console.warn('Failed to load saved video sizes', err);
         return null;
@@ -364,28 +464,59 @@ function getSavedVideoSize(cameraId) {
 
 function saveVideoSize(cameraId, size) {
     try {
-        const stored = localStorage.getItem(videoSizeStorageKey);
-        const map = stored ? JSON.parse(stored) : {};
-        map[cameraId] = { width: size.width, height: size.height };
+        const normalizedSize = sanitizeVideoSize(size);
+        if (!normalizedSize) {
+            return;
+        }
+
+        const map = parseSavedVideoSizeMap() || {};
+        map[cameraId] = {
+            width: normalizedSize.width,
+            height: normalizedSize.height,
+            aspectRatio: getCameraAspectRatio(cameraId)
+        };
         localStorage.setItem(videoSizeStorageKey, JSON.stringify(map));
     } catch (err) {
         console.warn('Failed to save video size', err);
     }
 }
 
+function queueSaveVideoSize(cameraId, size) {
+    if (resizeSaveTimers[cameraId]) {
+        clearTimeout(resizeSaveTimers[cameraId]);
+    }
+
+    resizeSaveTimers[cameraId] = setTimeout(() => {
+        saveVideoSize(cameraId, size);
+        delete resizeSaveTimers[cameraId];
+    }, resizeSaveDebounceMs);
+}
+
 function applySizeClamps() {
     Object.keys(cameraData).forEach(cameraId => {
         const wrapper = document.getElementById('videoWrap_' + cameraId);
         if (!wrapper) return;
+
         const parentWidth = wrapper.parentElement?.clientWidth || wrapper.clientWidth;
+        if (!parentWidth) return;
+
+        const style = window.getComputedStyle(wrapper);
+        const minWidth = Number.parseFloat(style.minWidth) || 280;
+        const maxAllowedWidth = Math.max(minWidth, Math.round(parentWidth));
         const currentWidth = wrapper.getBoundingClientRect().width;
-        if (parentWidth && currentWidth > parentWidth) {
-            wrapper.style.width = `${Math.round(parentWidth)}px`;
+
+        const clampedWidth = Math.max(minWidth, Math.min(Math.round(currentWidth), maxAllowedWidth));
+        const aspectRatio = getCameraAspectRatio(cameraId);
+        if (Math.abs(currentWidth - clampedWidth) > 1) {
+            wrapper.style.width = `${clampedWidth}px`;
+        }
+
+        if (clampedWidth > 0) {
             cameraData[cameraId].videoSize = {
-                width: Math.round(parentWidth),
-                height: Math.round(wrapper.getBoundingClientRect().height)
+                width: clampedWidth,
+                height: Math.round(clampedWidth / aspectRatio)
             };
-            saveVideoSize(cameraId, cameraData[cameraId].videoSize);
+            queueSaveVideoSize(cameraId, cameraData[cameraId].videoSize);
         }
     });
 }
@@ -402,19 +533,22 @@ function setupResizeObservers() {
                 }
 
                 const parentWidth = wrapper.parentElement?.clientWidth || entry.contentRect.width;
-                const nextWidth = Math.min(entry.contentRect.width, parentWidth);
-                const nextHeight = entry.contentRect.height;
+                const minWidth = Number.parseFloat(window.getComputedStyle(wrapper).minWidth) || 280;
+                const maxAllowedWidth = Math.max(minWidth, Math.round(parentWidth));
+                const nextWidth = Math.max(minWidth, Math.min(Math.round(entry.contentRect.width), maxAllowedWidth));
+                const aspectRatio = getCameraAspectRatio(cameraId);
+                const nextHeight = Math.round(nextWidth / aspectRatio);
 
-                if (nextWidth !== entry.contentRect.width) {
-                    wrapper.style.width = `${Math.round(nextWidth)}px`;
+                if (Math.abs(entry.contentRect.width - nextWidth) > 1) {
+                    wrapper.style.width = `${nextWidth}px`;
                 }
 
                 if (nextWidth > 0 && nextHeight > 0) {
                     cameraData[cameraId].videoSize = {
-                        width: Math.round(nextWidth),
-                        height: Math.round(nextHeight)
+                        width: nextWidth,
+                        height: nextHeight
                     };
-                    saveVideoSize(cameraId, cameraData[cameraId].videoSize);
+                    queueSaveVideoSize(cameraId, cameraData[cameraId].videoSize);
                 }
             }
         });
@@ -438,6 +572,10 @@ function removeCamera(cameraId) {
     if (resizeObservers[cameraId]) {
         resizeObservers[cameraId].disconnect();
         delete resizeObservers[cameraId];
+    }
+    if (resizeSaveTimers[cameraId]) {
+        clearTimeout(resizeSaveTimers[cameraId]);
+        delete resizeSaveTimers[cameraId];
     }
     delete cameraData[cameraId];
     delete fpsCounters[cameraId];
