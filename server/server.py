@@ -79,7 +79,8 @@ def handle_register(data):
         'connected': True,
         'last_seen': time(),
         'params': merged_params,
-        'recording': False
+        'recording': False,
+        'view_score': float(data.get('view_score', 0.0) or 0.0)
     }
     print(f"Camera registered: {camera_id} (sid: {sid})")
     broadcast_camera_list()
@@ -103,16 +104,19 @@ def handle_disconnect():
 @socketio.on('camera_frame')
 def handle_camera_frame(data):
     camera_id = data['camera_id']
+    view_score = float(data.get('view_score', 0.0) or 0.0)
     
     # Update last seen
     if camera_id in cameras:
         cameras[camera_id]['last_seen'] = time()
         cameras[camera_id]['connected'] = True
+        cameras[camera_id]['view_score'] = view_score
     
     # Relay frame to all web clients
     socketio.emit('frame_' + camera_id, {
         'image': data['image'],
-        'params': data['params']
+        'params': data['params'],
+        'view_score': view_score
     })
 
     if is_recording_active(camera_id):
@@ -171,7 +175,8 @@ def handle_get_cameras():
             'camera_id': cid,
             'connected': info['connected'],
             'params': info['params'],
-            'recording': info.get('recording', False)
+            'recording': info.get('recording', False),
+            'view_score': float(info.get('view_score', 0.0) or 0.0)
         }
         for cid, info in cameras.items()
         if info['connected']  # Only send connected cameras on initial load
@@ -184,7 +189,8 @@ def broadcast_camera_list():
             'camera_id': cid,
             'connected': info['connected'],
             'params': info['params'],
-            'recording': info.get('recording', False)
+            'recording': info.get('recording', False),
+            'view_score': float(info.get('view_score', 0.0) or 0.0)
         }
         for cid, info in cameras.items()
     ]

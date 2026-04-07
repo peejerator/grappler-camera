@@ -3,7 +3,13 @@ const cameraData = {};
 const fpsCounters = {};
 const resizeObservers = {};
 let focusedCameraId = null;
+let autoFocusEnabled = true;
+let lastAutoFocusSwitchAt = 0;
 const videoSizeStorageKey = 'cameraVideoSizes';
+const autoFocusSettings = {
+    scoreThreshold: 0.10,
+    switchCooldownMs: 3000
+};
 
 const defaultParams = {
     pan_speed: 40,
@@ -49,13 +55,15 @@ socket.on('camera_list', (cameras) => {
                 params: { ...defaultParams, ...(camera.params || {}) },
                 videoSize: getSavedVideoSize(cameraId),
                 recording: camera.recording || false,
-                servo: { ...servoDefaults }
+                servo: { ...servoDefaults },
+                viewScore: Number.isFinite(camera.view_score) ? camera.view_score : 0
             };
             setupCameraListeners(cameraId);
         } else {
             cameraData[cameraId].connected = camera.connected;
             cameraData[cameraId].params = { ...defaultParams, ...(camera.params || cameraData[cameraId].params || {}) };
             cameraData[cameraId].recording = camera.recording || false;
+            cameraData[cameraId].viewScore = Number.isFinite(camera.view_score) ? camera.view_score : (cameraData[cameraId].viewScore || 0);
             if (!cameraData[cameraId].servo) {
                 cameraData[cameraId].servo = { ...servoDefaults };
             }
@@ -93,6 +101,10 @@ function setupCameraListeners(cameraId) {
             cameraData[cameraId].params = data.params;
         }
 
+        if (Number.isFinite(data.view_score)) {
+            cameraData[cameraId].viewScore = data.view_score;
+        }
+
         if (!fpsCounters[cameraId]) {
             fpsCounters[cameraId] = { count: 0, lastUpdate: Date.now() };
         }
@@ -114,6 +126,10 @@ function setupCameraListeners(cameraId) {
         if (status) {
             status.textContent = 'Online';
             status.className = 'camera-status online';
+        }
+
+        if (autoFocusEnabled) {
+            evaluateAutoFocus();
         }
     });
 }
@@ -194,11 +210,13 @@ function renderCameras() {
     }
 
     grid.classList.toggle('focus-mode', Boolean(focusedCameraId));
+    updateAutoFocusButton();
 
     grid.innerHTML = cameraIds.map(cameraId => `
         <div id="card_${cameraId}" class="camera-card ${cameraData[cameraId].connected ? '' : 'disconnected'} ${focusedCameraId && focusedCameraId !== cameraId ? 'hidden' : ''} ${focusedCameraId === cameraId ? 'focused' : ''}">
             <div class="camera-header">
                 <span class="camera-title">${cameraId}</span>
+                <span class="camera-score">Score: ${formatViewScore(cameraData[cameraId].viewScore)}</span>
                 <span id="status_${cameraId}" class="camera-status ${cameraData[cameraId].connected ? 'online' : 'offline'}">
                     ${cameraData[cameraId].connected ? 'Online' : 'Offline'}
                 </span>
@@ -406,7 +424,9 @@ function setupResizeObservers() {
 }
 
 function toggleFocus(cameraId) {
+    autoFocusEnabled = false;
     focusedCameraId = focusedCameraId === cameraId ? null : cameraId;
+    updateAutoFocusButton();
     renderCameras();
 }
 
@@ -424,6 +444,9 @@ function removeCamera(cameraId) {
         focusedCameraId = null;
     }
     renderCameras();
+    if (autoFocusEnabled) {
+        evaluateAutoFocus(true);
+    }
 }
 
 function updateCameraUI(cameraId, params) {
@@ -485,6 +508,88 @@ function updateParam(cameraId, param, value) {
     if (param === 'tracking_enabled') {
         updateCameraUI(cameraId, cameraData[cameraId].params);
     }
+}
+
+function formatViewScore(score) {
+    if (!Number.isFinite(score)) {
+        return '0.0%';
+    }
+    return `${(score * 100).toFixed(1)}%`;
+}
+
+function updateAutoFocusButton() {
+    const button = document.getElementById('autoFocusButton');
+    if (!button) {
+        return;
+    }
+
+    button.textContent = `Auto-Focus Best Score: ${autoFocusEnabled ? 'On' : 'Off'}`;
+    button.classList.toggle('active', autoFocusEnabled);
+}
+
+function toggleAutoFocus() {
+    autoFocusEnabled = !autoFocusEnabled;
+    if (autoFocusEnabled) {
+        lastAutoFocusSwitchAt = 0;
+        evaluateAutoFocus(true);
+    }
+    updateAutoFocusButton();
+    renderCameras();
+}
+
+function evaluateAutoFocus(forceSwitch = false) {
+    if (!autoFocusEnabled) {
+        return false;
+    }
+
+    const cameraIds = Object.keys(cameraData).filter(cameraId => cameraData[cameraId]?.connected);
+    if (cameraIds.length === 0) {
+        return false;
+    }
+
+    let bestCameraId = null;
+    let bestScore = -Infinity;
+
+    cameraIds.forEach(cameraId => {
+        const score = Number.isFinite(cameraData[cameraId].viewScore) ? cameraData[cameraId].viewScore : 0;
+        if (score > bestScore) {
+            bestScore = score;
+            bestCameraId = cameraId;
+        }
+    });
+
+    if (!bestCameraId) {
+        return false;
+    }
+
+    const currentCamera = focusedCameraId ? cameraData[focusedCameraId] : null;
+    const currentScore = currentCamera && currentCamera.connected
+        ? (Number.isFinite(currentCamera.viewScore) ? currentCamera.viewScore : 0)
+        : -Infinity;
+    const now = Date.now();
+    const cooldownSatisfied = forceSwitch || (now - lastAutoFocusSwitchAt) >= autoFocusSettings.switchCooldownMs;
+
+    if (!focusedCameraId || !currentCamera || !currentCamera.connected) {
+        if (focusedCameraId !== bestCameraId) {
+            focusedCameraId = bestCameraId;
+            lastAutoFocusSwitchAt = now;
+            renderCameras();
+        }
+        return true;
+    }
+
+    if (
+        bestCameraId !== focusedCameraId &&
+        bestScore - currentScore >= autoFocusSettings.scoreThreshold &&
+        cooldownSatisfied
+    ) {
+        focusedCameraId = bestCameraId;
+        lastAutoFocusSwitchAt = now;
+        renderCameras();
+        return true;
+    }
+
+    return false;
 }
 
 function updateServoPreview(cameraId, axis, value) {

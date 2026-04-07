@@ -344,6 +344,7 @@ def tracking_loop():
     
     frame_count = 0
     last_results = None
+    camera_view_score = 0.0
     
     try:
         while True:
@@ -353,6 +354,7 @@ def tracking_loop():
                 break
 
             frame_count += 1
+            camera_view_score = 0.0
             
             # Process every 3rd frame for performance
             if frame_count % 3 == 0:
@@ -360,7 +362,7 @@ def tracking_loop():
                 last_results = results
             
             if last_results is None:
-                emit_frame(frame)
+                emit_frame(frame, camera_view_score)
                 continue
                 
             results = last_results
@@ -511,7 +513,7 @@ def tracking_loop():
                     cv2.line(frame, (int(frame_center_x), int(frame_center_y) - 20), 
                              (int(frame_center_x), int(frame_center_y) + 20), (255, 255, 0), 1)
 
-            emit_frame(frame)
+            emit_frame(frame, camera_view_score)
 
     finally:
         cap.release()
@@ -519,14 +521,15 @@ def tracking_loop():
         pwm.setServoPulse(TILT_CHANNEL, TILT_CENTER)
         print("Pose detection stopped.")
 
-def emit_frame(frame):
+def emit_frame(frame, view_score=0.0):
     if sio.connected:
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
         frame_base64 = base64.b64encode(buffer).decode('utf-8')
         sio.emit('camera_frame', {
             'camera_id': CAMERA_ID,
             'image': frame_base64,
-            'params': params
+            'params': params,
+            'view_score': float(view_score)
         })
 
 if __name__ == "__main__":

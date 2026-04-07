@@ -45,11 +45,19 @@ h1 {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 10px;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 .camera-title {
     color: #00d9ff;
     font-size: 18px;
     font-weight: 600;
+}
+.camera-score {
+    color: #b8c6d9;
+    font-size: 12px;
+    font-family: monospace;
+    margin-left: auto;
 }
 .camera-status {
     padding: 4px 8px;
@@ -209,6 +217,10 @@ button:active {
     background: transparent;
     color: #00d9ff;
     border: 1px solid #00d9ff;
+}
+.btn-secondary.active {
+    background: #00bf63;
+    color: #1a1a2e;
 }
 .global-controls {
     background: #16213e;
