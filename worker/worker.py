@@ -73,22 +73,22 @@ class Keypoint(IntEnum):
 # Keypoint scores
 KEYPOINT_SCORES = {
     Keypoint.NOSE: 0.8,
-    #Keypoint.LEFT_EYE: ,
-    #Keypoint.RIGHT_EYE: ,
-    #Keypoint.LEFT_EAR: ,
-    # Keypoint.RIGHT_EAR: ,
-    # Keypoint.LEFT_SHOULDER: ,
-    # Keypoint.RIGHT_SHOULDER: ,
-    # Keypoint.LEFT_ELBOW: ,
-    # Keypoint.RIGHT_ELBOW: ,
+    Keypoint.LEFT_EYE: 0,
+    Keypoint.RIGHT_EYE: 0,
+    Keypoint.LEFT_EAR: 0,
+    Keypoint.RIGHT_EAR: 0,
+    Keypoint.LEFT_SHOULDER: 0,
+    Keypoint.RIGHT_SHOULDER: 0,
+    Keypoint.LEFT_ELBOW: 0,
+    Keypoint.RIGHT_ELBOW: 0,
     Keypoint.LEFT_WRIST: 0.9,
     Keypoint.RIGHT_WRIST: 0.9,
-    # Keypoint.LEFT_HIP: ,
-    # Keypoint.RIGHT_HIP: ,
-    # Keypoint.LEFT_KNEE: ,
-    # Keypoint.RIGHT_KNEE: ,
-    # Keypoint.LEFT_ANKLE: ,
-    # Keypoint.RIGHT_ANKLE: 
+    Keypoint.LEFT_HIP: 0,
+    Keypoint.RIGHT_HIP: 0,
+    Keypoint.LEFT_KNEE: 0,
+    Keypoint.RIGHT_KNEE: 0,
+    Keypoint.LEFT_ANKLE: 0,
+    Keypoint.RIGHT_ANKLE: 0
 }
 
 KEYPOINT_CONFIDENCE_FLOOR = 0.30
