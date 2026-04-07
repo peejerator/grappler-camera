@@ -134,6 +134,28 @@ def handle_center_servo(data):
     socketio.emit(f'center_servo_{camera_id}')
     socketio.emit('servo_centered', {'camera_id': camera_id})
 
+@socketio.on('move_servo')
+def handle_move_servo(data):
+    camera_id = data['camera_id']
+    pan = data['pan']
+    tilt = data['tilt']
+
+    camera_info = cameras.get(camera_id)
+    if camera_info and camera_info.get('params', {}).get('tracking_enabled'):
+        socketio.emit('servo_move_rejected', {
+            'camera_id': camera_id,
+            'reason': 'Tracking is enabled'
+        })
+        return
+
+    if camera_info:
+        camera_info['params']['tracking_enabled'] = False
+        socketio.emit(f'update_params_{camera_id}', camera_info['params'])
+        socketio.emit('params_updated', {'camera_id': camera_id, 'params': camera_info['params']})
+
+    socketio.emit(f'move_servo_{camera_id}', {'pan': pan, 'tilt': tilt})
+    socketio.emit('servo_moved', {'camera_id': camera_id, 'pan': pan, 'tilt': tilt})
+
 @socketio.on('get_cameras')
 def handle_get_cameras():
     camera_list = [

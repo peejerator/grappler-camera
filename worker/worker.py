@@ -187,6 +187,20 @@ def on_center_servo():
     pwm.setServoPulse(TILT_CHANNEL, TILT_CENTER)
     print("Servos centered")
 
+@sio.on(f'move_servo_{CAMERA_ID}')
+def on_move_servo(data):
+    global pan_pulse, tilt_pulse
+    if params.get('tracking_enabled'):
+        print("Ignoring manual servo command while tracking is enabled")
+        return
+
+    params['tracking_enabled'] = False
+    pan_pulse = data['pan']
+    tilt_pulse = data['tilt']
+    pwm.setServoPulse(PAN_CHANNEL, pan_pulse)
+    pwm.setServoPulse(TILT_CHANNEL, tilt_pulse)
+    print(f"Servos moved to: pan={pan_pulse}, tilt={tilt_pulse}")
+
 def get_chest_position(keypoints):
     left_shoulder = keypoints[Keypoint.LEFT_SHOULDER]
     right_shoulder = keypoints[Keypoint.RIGHT_SHOULDER]
@@ -339,7 +353,7 @@ def tracking_loop():
 
                 people_count = 0
                 person_centers_x = []
-                person_chests_y = []
+                person_centers_y = []
 
                 total_score = 0
                 
@@ -367,17 +381,17 @@ def tracking_loop():
                         opt_pos = get_optimal_tracking_position(kps_xy)
                         
                         if opt_pos is not None:
-                            person_chests_y.append(opt_pos[1])
+                            person_centers_y.append(opt_pos[1])
                             # draw chest circle for each person
                             cv2.circle(frame, (int(opt_pos[0]), int(opt_pos[1])), 8, (255, 0, 255), -1)
                         else:
                             # if chest is not in frame default to the center of the bounding box
                             # TODO: make this smarter so that it tries to find the chest or make
                             #       it dynamic/configurable
-                            person_chests_y.append((y1 + y2) / 2)
+                            person_centers_y.append((y1 + y2) / 2)
                     else:
                         # Fallback to bounding box center
-                        person_chests_y.append((y1 + y2) / 2)
+                        person_centers_y.append((y1 + y2) / 2)
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(
@@ -405,7 +419,7 @@ def tracking_loop():
                     target_x = sum(person_centers_x) / len(person_centers_x)
                     
                     # target y: average chest position
-                    target_y = sum(person_chests_y) / len(person_chests_y)
+                    target_y = sum(person_centers_y) / len(person_centers_y)
                     
                     # draw target point
                     cv2.circle(frame, (int(target_x), int(target_y)), 12, (0, 255, 255), 2)

@@ -13,6 +13,11 @@ const defaultParams = {
     tracking_enabled: false
 };
 
+const servoDefaults = {
+    pan: 1500,
+    tilt: 1500
+};
+
 socket.on('connect', () => {
     console.log('Connected to server');
     socket.emit('get_cameras');
@@ -26,7 +31,8 @@ socket.on('camera_list', (cameras) => {
                 connected: camera.connected,
                 params: camera.params || { ...defaultParams },
                 videoSize: getSavedVideoSize(cameraId),
-                recording: camera.recording || false
+                recording: camera.recording || false,
+                servo: { ...servoDefaults }
             };
             setupCameraListeners(cameraId);
         } else {
@@ -133,6 +139,24 @@ socket.on('recording_error', (data) => {
     console.error('Recording error', data.error || 'Unknown error');
 });
 
+socket.on('servo_moved', (data) => {
+    const cameraId = data.camera_id;
+    if (!cameraData[cameraId]) {
+        return;
+    }
+
+    cameraData[cameraId].servo.pan = data.pan;
+    cameraData[cameraId].servo.tilt = data.tilt;
+    updateServoPreview(cameraId, 'pan', data.pan);
+    updateServoPreview(cameraId, 'tilt', data.tilt);
+});
+
+socket.on('servo_move_rejected', (data) => {
+    if (data?.reason) {
+        console.warn(`Servo move rejected for ${data.camera_id}: ${data.reason}`);
+    }
+});
+
 function renderCameras() {
     const grid = document.getElementById('cameraGrid');
     const cameraIds = Object.keys(cameraData);
@@ -177,6 +201,30 @@ function renderCameras() {
                     </div>
                 </div>
 
+                <div class="control-group">
+                    <label>Manual Pan Pulse: <span id="manualPanValue_${cameraId}">${cameraData[cameraId].servo.pan}</span></label>
+                    <input type="range" id="manualPan_${cameraId}" min="900" max="2100" step="1"
+                           value="${cameraData[cameraId].servo.pan}"
+                           ${cameraData[cameraId].params.tracking_enabled ? 'disabled' : ''}
+                           oninput="updateServoPreview('${cameraId}', 'pan', parseInt(this.value, 10))">
+                </div>
+
+                <div class="control-group">
+                    <label>Manual Tilt Pulse: <span id="manualTiltValue_${cameraId}">${cameraData[cameraId].servo.tilt}</span></label>
+                    <input type="range" id="manualTilt_${cameraId}" min="900" max="2100" step="1"
+                           value="${cameraData[cameraId].servo.tilt}"
+                           ${cameraData[cameraId].params.tracking_enabled ? 'disabled' : ''}
+                           oninput="updateServoPreview('${cameraId}', 'tilt', parseInt(this.value, 10))">
+                </div>
+
+                <div class="control-group">
+                    <div class="button-row">
+                        <button class="btn-primary" onclick="moveServo('${cameraId}')" ${cameraData[cameraId].params.tracking_enabled ? 'disabled' : ''}>Move Servo</button>
+                        <button id="centerServo_${cameraId}" class="btn-secondary" onclick="centerServo('${cameraId}')" ${cameraData[cameraId].params.tracking_enabled ? 'disabled' : ''}>Center</button>
+                    </div>
+                    <div id="manualControlHint_${cameraId}" class="helper-text" style="display: ${cameraData[cameraId].params.tracking_enabled ? 'block' : 'none'};">Disable tracking to use manual servo control.</div>
+                </div>
+
                 <div class="speed-controls">
                     <div class="control-group">
                         <label>Pan Speed: <span id="panSpeedValue_${cameraId}">${cameraData[cameraId].params.pan_speed}</span></label>
@@ -208,7 +256,6 @@ function renderCameras() {
                 </div>
 
                 <div class="button-row">
-                    <button class="btn-primary" onclick="centerServo('${cameraId}')">Center</button>
                     <button class="btn-secondary" onclick="resetDefaults('${cameraId}')">Reset</button>
                     <button class="btn-secondary" onclick="toggleRecording('${cameraId}')" ${cameraData[cameraId].connected ? '' : 'disabled'}>
                         ${cameraData[cameraId].recording ? 'Stop Recording' : 'Start Recording'}
@@ -337,12 +384,20 @@ function removeCamera(cameraId) {
 
 function updateCameraUI(cameraId, params) {
     const tracking = document.getElementById('tracking_' + cameraId);
+    const manualPan = document.getElementById('manualPan_' + cameraId);
+    const manualTilt = document.getElementById('manualTilt_' + cameraId);
+    const centerButton = document.getElementById('centerServo_' + cameraId);
+    const manualHint = document.getElementById('manualControlHint_' + cameraId);
     const panSpeed = document.getElementById('panSpeed_' + cameraId);
     const tiltSpeed = document.getElementById('tiltSpeed_' + cameraId);
     const deadzone = document.getElementById('deadzone_' + cameraId);
     const confidence = document.getElementById('confidence_' + cameraId);
 
     if (tracking) tracking.checked = params.tracking_enabled;
+    if (manualPan) manualPan.disabled = params.tracking_enabled;
+    if (manualTilt) manualTilt.disabled = params.tracking_enabled;
+    if (centerButton) centerButton.disabled = params.tracking_enabled;
+    if (manualHint) manualHint.style.display = params.tracking_enabled ? 'block' : 'none';
     if (panSpeed) {
         panSpeed.value = params.pan_speed;
         document.getElementById('panSpeedValue_' + cameraId).textContent = params.pan_speed;
@@ -378,9 +433,51 @@ function updateParam(cameraId, param, value) {
         camera_id: cameraId,
         params: cameraData[cameraId].params
     });
+
+    if (param === 'tracking_enabled') {
+        updateCameraUI(cameraId, cameraData[cameraId].params);
+    }
+}
+
+function updateServoPreview(cameraId, axis, value) {
+    if (!cameraData[cameraId]) {
+        return;
+    }
+
+    cameraData[cameraId].servo[axis] = value;
+
+    const valueElement = document.getElementById(`manual${axis === 'pan' ? 'Pan' : 'Tilt'}Value_${cameraId}`);
+    if (valueElement) {
+        valueElement.textContent = value;
+    }
+}
+
+function moveServo(cameraId) {
+    if (!cameraData[cameraId] || cameraData[cameraId].params.tracking_enabled) {
+        if (cameraData[cameraId]) {
+            updateParam(cameraId, 'tracking_enabled', false);
+        }
+    }
+
+    if (!cameraData[cameraId] || cameraData[cameraId].params.tracking_enabled) {
+        return;
+    }
+
+    socket.emit('move_servo', {
+        camera_id: cameraId,
+        pan: cameraData[cameraId].servo.pan,
+        tilt: cameraData[cameraId].servo.tilt
+    });
 }
 
 function centerServo(cameraId) {
+    if (cameraData[cameraId] && cameraData[cameraId].params.tracking_enabled) {
+        return;
+    }
+
+    if (cameraData[cameraId]) {
+        cameraData[cameraId].servo = { ...servoDefaults };
+    }
     socket.emit('center_servo', { camera_id: cameraId });
 }
 
@@ -395,7 +492,9 @@ function resetDefaults(cameraId) {
 
 function centerAllServos() {
     Object.keys(cameraData).forEach(cameraId => {
-        socket.emit('center_servo', { camera_id: cameraId });
+        if (!cameraData[cameraId].params.tracking_enabled) {
+            socket.emit('center_servo', { camera_id: cameraId });
+        }
     });
 }
 
