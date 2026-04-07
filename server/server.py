@@ -36,6 +36,16 @@ socket_to_camera = {}
 # track camera status: {camera_id: {'connected': bool, 'last_seen': timestamp}}
 cameras = {}
 
+DEFAULT_CAMERA_PARAMS = {
+    'pan_speed': 40,
+    'tilt_speed': 30,
+    'deadzone': 0.1,
+    'confidence_threshold': 0.80,
+    'tracking_enabled': False,
+    'draw_skeleton': True,
+    'draw_stats': True
+}
+
 # recording state
 recordings_dir = os.path.join(os.path.dirname(__file__), "recordings")
 os.makedirs(recordings_dir, exist_ok=True)
@@ -62,16 +72,13 @@ def handle_register(data):
     sid = request.sid
     
     socket_to_camera[sid] = camera_id
+    incoming_params = data.get('params') or {}
+    merged_params = {**DEFAULT_CAMERA_PARAMS, **incoming_params}
+
     cameras[camera_id] = {
         'connected': True,
         'last_seen': time(),
-        'params': {
-            'pan_speed': 40,
-            'tilt_speed': 30,
-            'deadzone': 0.1,
-            'confidence_threshold': 0.80,
-            'tracking_enabled': False
-        },
+        'params': merged_params,
         'recording': False
     }
     print(f"Camera registered: {camera_id} (sid: {sid})")
@@ -117,16 +124,17 @@ def handle_camera_frame(data):
 def handle_update_params(data):
     camera_id = data['camera_id']
     params = data['params']
+    merged_params = {**DEFAULT_CAMERA_PARAMS, **params}
     
     # Update stored params
     if camera_id in cameras:
-        cameras[camera_id]['params'] = params
+        cameras[camera_id]['params'] = merged_params
     
     # Send to specific camera
-    socketio.emit(f'update_params_{camera_id}', params)
+    socketio.emit(f'update_params_{camera_id}', merged_params)
     
     # Broadcast to all web clients
-    socketio.emit('params_updated', {'camera_id': camera_id, 'params': params})
+    socketio.emit('params_updated', {'camera_id': camera_id, 'params': merged_params})
 
 @socketio.on('center_servo')
 def handle_center_servo(data):

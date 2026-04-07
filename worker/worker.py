@@ -43,7 +43,9 @@ params = {
     'tilt_speed': 30,
     'deadzone': 0.1,
     'confidence_threshold': 0.80,
-    'tracking_enabled': False
+    'tracking_enabled': False,
+    'draw_skeleton': True,
+    'draw_stats': True
 }
 
 # Keypoint indices (COCO format)
@@ -179,6 +181,10 @@ def on_update_params(data):
         params['confidence_threshold'] = float(data['confidence_threshold'])
     if 'tracking_enabled' in data:
         params['tracking_enabled'] = bool(data['tracking_enabled'])
+    if 'draw_skeleton' in data:
+        params['draw_skeleton'] = bool(data['draw_skeleton'])
+    if 'draw_stats' in data:
+        params['draw_stats'] = bool(data['draw_stats'])
     print(f"Params updated: {params}")
 
 @sio.on(f'center_servo_{CAMERA_ID}')
@@ -415,8 +421,9 @@ def tracking_loop():
                         
                         if opt_pos is not None:
                             person_centers_y.append(opt_pos[1])
-                            # draw chest circle for each person
-                            cv2.circle(frame, (int(opt_pos[0]), int(opt_pos[1])), 8, (255, 0, 255), -1)
+                            if params.get('draw_skeleton', True):
+                                # draw chest circle for each person
+                                cv2.circle(frame, (int(opt_pos[0]), int(opt_pos[1])), 8, (255, 0, 255), -1)
                         else:
                             # if chest is not in frame default to the center of the bounding box
                             # TODO: make this smarter so that it tries to find the chest or make
@@ -426,28 +433,30 @@ def tracking_loop():
                         # Fallback to bounding box center
                         person_centers_y.append((y1 + y2) / 2)
                     
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(
-                        frame, f"Person {conf:.2f}", (x1, y1 - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
-                    )
+                    if params.get('draw_skeleton', True):
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(
+                            frame, f"Person {conf:.2f}", (x1, y1 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+                        )
 
                     if i >= len(kps_all_np):
                         continue
                     kps_xy = kps_all_np[i]
                     kps_conf = kps_conf_all_np[i] if kps_conf_all_np is not None else None
 
-                    for j, (kx, ky) in enumerate(kps_xy):
-                        x, y = int(kx), int(ky)
-                        draw_conf = float(kps_conf[j]) if kps_conf is not None else 1.0
-                        if j < len(Keypoint) and draw_conf >= KEYPOINT_CONFIDENCE_FLOOR:
-                            cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
+                    if params.get('draw_skeleton', True):
+                        for j, (kx, ky) in enumerate(kps_xy):
+                            x, y = int(kx), int(ky)
+                            draw_conf = float(kps_conf[j]) if kps_conf is not None else 1.0
+                            if j < len(Keypoint) and draw_conf >= KEYPOINT_CONFIDENCE_FLOOR:
+                                cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
 
-                    for a, b in SKELETON:
-                        if a < len(kps_xy) and b < len(kps_xy) and (kps_conf is None or (kps_conf[a] >= KEYPOINT_CONFIDENCE_FLOOR and kps_conf[b] >= KEYPOINT_CONFIDENCE_FLOOR)):
-                            xA, yA = map(int, kps_xy[a])
-                            xB, yB = map(int, kps_xy[b])
-                            cv2.line(frame, (xA, yA), (xB, yB), (255, 0, 0), 2)
+                        for a, b in SKELETON:
+                            if a < len(kps_xy) and b < len(kps_xy) and (kps_conf is None or (kps_conf[a] >= KEYPOINT_CONFIDENCE_FLOOR and kps_conf[b] >= KEYPOINT_CONFIDENCE_FLOOR)):
+                                xA, yA = map(int, kps_xy[a])
+                                xB, yB = map(int, kps_xy[b])
+                                cv2.line(frame, (xA, yA), (xB, yB), (255, 0, 0), 2)
 
                 # servo tracking
                 if len(person_centers_x) > 0 and params['tracking_enabled']:
@@ -457,8 +466,9 @@ def tracking_loop():
                     # target y: average chest position
                     target_y = sum(person_centers_y) / len(person_centers_y)
                     
-                    # draw target point
-                    cv2.circle(frame, (int(target_x), int(target_y)), 12, (0, 255, 255), 2)
+                    if params.get('draw_stats', True):
+                        # draw target point
+                        cv2.circle(frame, (int(target_x), int(target_y)), 12, (0, 255, 255), 2)
                     
                     # get current offset from target point [-1, 1]
                     offset_x = (target_x - frame_center_x) / frame_center_x
@@ -480,25 +490,26 @@ def tracking_loop():
                 tilt_angle = (tilt_pulse - TILT_MIN) / (TILT_MAX - TILT_MIN) * 180
                 camera_view_score = sum(person_view_scores) / len(person_view_scores) if person_view_scores else 0.0
                 
-                status = "ON" if params['tracking_enabled'] else "OFF"
-                cv2.putText(
-                    frame, f"{CAMERA_ID} | People: {people_count} | Tracking: {status}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-                )
-                cv2.putText(
-                    frame, f"Pan: {pan_angle:.0f} | Tilt: {tilt_angle:.0f}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-                )
-                cv2.putText(
-                    frame, f"View Score: {camera_view_score * 100:.1f}%", (10, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-                )
-                
-                # crosshair at center of frame
-                cv2.line(frame, (int(frame_center_x) - 20, int(frame_center_y)), 
-                         (int(frame_center_x) + 20, int(frame_center_y)), (255, 255, 0), 1)
-                cv2.line(frame, (int(frame_center_x), int(frame_center_y) - 20), 
-                         (int(frame_center_x), int(frame_center_y) + 20), (255, 255, 0), 1)
+                if params.get('draw_stats', True):
+                    status = "ON" if params['tracking_enabled'] else "OFF"
+                    cv2.putText(
+                        frame, f"{CAMERA_ID} | People: {people_count} | Tracking: {status}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
+                    cv2.putText(
+                        frame, f"Pan: {pan_angle:.0f} | Tilt: {tilt_angle:.0f}", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
+                    cv2.putText(
+                        frame, f"View Score: {camera_view_score * 100:.1f}%", (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
+
+                    # crosshair at center of frame
+                    cv2.line(frame, (int(frame_center_x) - 20, int(frame_center_y)), 
+                             (int(frame_center_x) + 20, int(frame_center_y)), (255, 255, 0), 1)
+                    cv2.line(frame, (int(frame_center_x), int(frame_center_y) - 20), 
+                             (int(frame_center_x), int(frame_center_y) + 20), (255, 255, 0), 1)
 
             emit_frame(frame)
 

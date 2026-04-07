@@ -10,7 +10,9 @@ const defaultParams = {
     tilt_speed: 30,
     deadzone: 0.1,
     confidence_threshold: 0.80,
-    tracking_enabled: false
+    tracking_enabled: false,
+    draw_skeleton: true,
+    draw_stats: true
 };
 
 const servoDefaults = {
@@ -44,7 +46,7 @@ socket.on('camera_list', (cameras) => {
         if (!cameraData[cameraId]) {
             cameraData[cameraId] = {
                 connected: camera.connected,
-                params: camera.params || { ...defaultParams },
+                params: { ...defaultParams, ...(camera.params || {}) },
                 videoSize: getSavedVideoSize(cameraId),
                 recording: camera.recording || false,
                 servo: { ...servoDefaults }
@@ -52,7 +54,7 @@ socket.on('camera_list', (cameras) => {
             setupCameraListeners(cameraId);
         } else {
             cameraData[cameraId].connected = camera.connected;
-            cameraData[cameraId].params = camera.params || cameraData[cameraId].params;
+            cameraData[cameraId].params = { ...defaultParams, ...(camera.params || cameraData[cameraId].params || {}) };
             cameraData[cameraId].recording = camera.recording || false;
             if (!cameraData[cameraId].servo) {
                 cameraData[cameraId].servo = { ...servoDefaults };
@@ -219,6 +221,27 @@ function renderCameras() {
                             <span class="toggle-slider"></span>
                         </label>
                         <span>Tracking Enabled</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <div class="toggle-container">
+                        <label class="toggle">
+                            <input type="checkbox" id="drawSkeleton_${cameraId}" 
+                                   onchange="updateParam('${cameraId}', 'draw_skeleton', this.checked)"
+                                   ${cameraData[cameraId].params.draw_skeleton ? 'checked' : ''}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span>Draw Skeleton</span>
+                    </div>
+                    <div class="toggle-container">
+                        <label class="toggle">
+                            <input type="checkbox" id="drawStats_${cameraId}" 
+                                   onchange="updateParam('${cameraId}', 'draw_stats', this.checked)"
+                                   ${cameraData[cameraId].params.draw_stats ? 'checked' : ''}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span>Draw Stats</span>
                     </div>
                 </div>
 
@@ -405,6 +428,8 @@ function removeCamera(cameraId) {
 
 function updateCameraUI(cameraId, params) {
     const tracking = document.getElementById('tracking_' + cameraId);
+    const drawSkeleton = document.getElementById('drawSkeleton_' + cameraId);
+    const drawStats = document.getElementById('drawStats_' + cameraId);
     const manualPan = document.getElementById('manualPan_' + cameraId);
     const manualTilt = document.getElementById('manualTilt_' + cameraId);
     const centerButton = document.getElementById('centerServo_' + cameraId);
@@ -415,6 +440,8 @@ function updateCameraUI(cameraId, params) {
     const confidence = document.getElementById('confidence_' + cameraId);
 
     if (tracking) tracking.checked = params.tracking_enabled;
+    if (drawSkeleton) drawSkeleton.checked = Boolean(params.draw_skeleton);
+    if (drawStats) drawStats.checked = Boolean(params.draw_stats);
     if (manualPan) manualPan.disabled = params.tracking_enabled;
     if (manualTilt) manualTilt.disabled = params.tracking_enabled;
     if (centerButton) centerButton.disabled = params.tracking_enabled;
@@ -539,5 +566,17 @@ function enableAllTracking() {
 function disableAllTracking() {
     Object.keys(cameraData).forEach(cameraId => {
         updateParam(cameraId, 'tracking_enabled', false);
+    });
+}
+
+function setAllDrawSkeleton(enabled) {
+    Object.keys(cameraData).forEach(cameraId => {
+        updateParam(cameraId, 'draw_skeleton', enabled);
+    });
+}
+
+function setAllDrawStats(enabled) {
+    Object.keys(cameraData).forEach(cameraId => {
+        updateParam(cameraId, 'draw_stats', enabled);
     });
 }
