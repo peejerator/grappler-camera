@@ -227,71 +227,60 @@ def get_chest_position(keypoints):
         return None
     
 def get_optimal_tracking_position(keypoints: np.ndarray) -> tuple[float, float] | None:
-    '''
-    Determine optimal tracking position based on keypoints.
-    If hips and shoulders are visible, take the midpoint between them as the center of the torso.
-    Else if hips are visible, use their midpoint.
-    Else if shoulders are visible, use their midpoint.
-    Else if wrists are visible, use them.
-    Else if face keypoints are visible, use the nose or midpoint between eyes.
-    Else if any other keypoint is visible, use it.
-
-    Returns (x, y) coordinates of optimal tracking point or None if no valid keypoints are found.
-    '''
-
-    # Check for shoulders and hips
-    left_shoulder = keypoints[Keypoint.LEFT_SHOULDER]
-    right_shoulder = keypoints[Keypoint.RIGHT_SHOULDER]
-    left_hip = keypoints[Keypoint.LEFT_HIP]
-    right_hip = keypoints[Keypoint.RIGHT_HIP]
-
     def is_valid(kp):
         return kp[0] > 0 and kp[1] > 0
-    
-    def average_kp(*args):
-        count = 0
-        x, y = 0, 0
-        for kp in args:
-            x += kp[0]
-            y += kp[1]
-            count += 1
-        if count == 0:
-            return None
-        return (x / count, y / count)
-    
-    # If hips and shoulders are valid, use their midpoint as torso center
-    if is_valid(left_shoulder) and is_valid(right_shoulder) and is_valid(left_hip) and is_valid(right_hip):
-        return average_kp(left_shoulder, right_shoulder, left_hip, right_hip)
-    
-    # If only hips are valid, use their midpoint
-    if is_valid(left_hip) and is_valid(right_hip):
-        return average_kp(left_hip, right_hip)
-    
-    # If only shoulders are valid, use their midpoint
-    if is_valid(left_shoulder) and is_valid(right_shoulder):
-        return average_kp(left_shoulder, right_shoulder)
-    
-    # If wrists are valid, use them
-    left_wrist = keypoints[Keypoint.LEFT_WRIST]
-    right_wrist = keypoints[Keypoint.RIGHT_WRIST]
-    if is_valid(left_wrist) and is_valid(right_wrist):
-        return average_kp(left_wrist, right_wrist)
-    
-    # If face keypoints are valid, use nose or midpoint between eyes
+
+    # Extract keypoints
+    ls = keypoints[Keypoint.LEFT_SHOULDER]
+    rs = keypoints[Keypoint.RIGHT_SHOULDER]
+    lh = keypoints[Keypoint.LEFT_HIP]
+    rh = keypoints[Keypoint.RIGHT_HIP]
+
+    # Weighted torso center (hips more important)
+    weighted_points = []
+
+    if is_valid(ls):
+        weighted_points.append((ls, 1))
+    if is_valid(rs):
+        weighted_points.append((rs, 1))
+    if is_valid(lh):
+        weighted_points.append((lh, 2))
+    if is_valid(rh):
+        weighted_points.append((rh, 2))
+
+    if len(weighted_points) >= 2:
+        total_weight = sum(w for _, w in weighted_points)
+        x = sum(p[0] * w for p, w in weighted_points) / total_weight
+        y = sum(p[1] * w for p, w in weighted_points) / total_weight
+        return (x, y)
+
+    # --- fallback logic (unchanged idea, cleaner execution) ---
+
+    # hips only
+    if is_valid(lh) and is_valid(rh):
+        return ((lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2)
+
+    # shoulders only
+    if is_valid(ls) and is_valid(rs):
+        return ((ls[0] + rs[0]) / 2, (ls[1] + rs[1]) / 2)
+
+    # wrists
+    lw = keypoints[Keypoint.LEFT_WRIST]
+    rw = keypoints[Keypoint.RIGHT_WRIST]
+    if is_valid(lw) and is_valid(rw):
+        return ((lw[0] + rw[0]) / 2, (lw[1] + rw[1]) / 2)
+
+    # face
     nose = keypoints[Keypoint.NOSE]
-    left_eye = keypoints[Keypoint.LEFT_EYE]
-    right_eye = keypoints[Keypoint.RIGHT_EYE]
     if is_valid(nose):
-        return nose
-    
-    if is_valid(left_eye) and is_valid(right_eye):
-        return average_kp(left_eye, right_eye)
-    
-    # If any other keypoint is valid, use it
+        return (nose[0], nose[1])
+
+    # last resort: any visible keypoint
     for kp in keypoints:
         if is_valid(kp):
-            return kp
+            return (kp[0], kp[1])
 
+    return None
 
 def calculate_person_view_score(keypoint_confidences: np.ndarray | list[float] | None) -> float:
     """Compute weighted pose visibility score for one person in range [0.0, 1.0]."""

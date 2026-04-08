@@ -423,4 +423,4 @@ if __name__ == "__main__":
     heartbeat_thread = threading.Thread(target=heartbeat_checker, daemon=True)
     heartbeat_thread.start()
     
-    socketio.run(app, host='0.0.0.0', port=args.port)
+    socketio.run(app, host='0.0.0.0', port=args.port, allow_unsafe_werkzeug=True)
