@@ -13,6 +13,7 @@ from enum import IntEnum, auto
 # config
 CAMERA_ID = socket.gethostname()
 SERVER_IP = None  # discovered via mDNS
+SERVER_CANDIDATES = []
 SERVER_DISCOVERED = False
 
 # servo stuff
@@ -118,19 +119,24 @@ SKELETON = [
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 
 def discover_server(wait_time):
-    """Discover server via mDNS and return its address"""
-    global SERVER_IP, SERVER_DISCOVERED
+    """Discover server via mDNS and return discovered server endpoints."""
+    global SERVER_IP, SERVER_DISCOVERED, SERVER_CANDIDATES
     
-    discovered_server = {'ip': None}
+    discovered_server = {'endpoints': set()}
     
     class ServerListener:
         def add_service(self, zeroconf, service_type, name):
             try:
                 info = zeroconf.get_service_info(service_type, name)
                 if info and info.properties.get(b'camera_server') == b'true':
-                    ip = socket.inet_ntoa(info.addresses[0])
-                    discovered_server['ip'] = f"http://{ip}:{info.port}"
-                    print(f"Server discovered: {discovered_server['ip']}")
+                    for raw_address in info.addresses:
+                        if len(raw_address) != 4:
+                            continue
+                        ip = socket.inet_ntoa(raw_address)
+                        endpoint = f"http://{ip}:{info.port}"
+                        if endpoint not in discovered_server['endpoints']:
+                            discovered_server['endpoints'].add(endpoint)
+                            print(f"Server discovered: {endpoint}")
             except Exception as e:
                 print(f"Error discovering server: {e}")
         
@@ -146,18 +152,22 @@ def discover_server(wait_time):
         
         # wait up to 10 seconds for server discovery
         for i in range(wait_time * 2):
-            if discovered_server['ip']:
-                SERVER_IP = discovered_server['ip']
+            if discovered_server['endpoints']:
+                SERVER_CANDIDATES = sorted(discovered_server['endpoints'])
+                SERVER_IP = SERVER_CANDIDATES[0]
                 SERVER_DISCOVERED = True
-                return
+                zeroconf.close()
+                return SERVER_CANDIDATES
             sleep(0.5)
         
         zeroconf.close()
         
         if not SERVER_IP:
             print("Server not discovered via mDNS")
+        return []
     except Exception as e:
         print(f"mDNS discovery failed: {e}")
+        return []
 
 @sio.event
 def connect():
@@ -540,14 +550,19 @@ if __name__ == "__main__":
     argparser.add_argument('--mdns_wait', type=int, default=10, help='mDNS discovery wait time in seconds (default: 10). Only used if --server_ip is not provided.')
     args = argparser.parse_args()
 
+    connection_targets = []
+
     if args.server_ip:
         SERVER_IP = args.server_ip
+        connection_targets = [args.server_ip]
     else:
         # discover server via mDNS
         print("Discovering server via mDNS...")
-        discover_server(args.mdns_wait)
+        connection_targets = discover_server(args.mdns_wait)
+        if connection_targets:
+            SERVER_IP = connection_targets[0]
     
-    if not SERVER_IP:
+    if not connection_targets:
         print("Failed to discover server. Exiting.")
         exit(1)
     
@@ -556,7 +571,16 @@ if __name__ == "__main__":
     tracking_thread.start()
     
     # connect to server
+    target_index = 0
     while True:
+        if not connection_targets:
+            print("No server endpoints available, retrying discovery in 5s...")
+            sleep(5)
+            if not args.server_ip:
+                connection_targets = discover_server(args.mdns_wait)
+            continue
+
+        SERVER_IP = connection_targets[target_index % len(connection_targets)]
         try:
             print(f"Connecting to {SERVER_IP}...")
             sio.connect(SERVER_IP)
@@ -564,4 +588,9 @@ if __name__ == "__main__":
         except Exception as e:
             #TODO: Handle exception printing better
             print(f"Connection failed: {e}, retrying in 5s...")
+            target_index += 1
+            if not args.server_ip and target_index % len(connection_targets) == 0:
+                refreshed = discover_server(args.mdns_wait)
+                if refreshed:
+                    connection_targets = refreshed
             sleep(5)

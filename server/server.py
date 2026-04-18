@@ -6,6 +6,7 @@ import threading
 import logging
 from zeroconf import ServiceInfo, Zeroconf
 import socket
+import ipaddress
 import os
 import base64
 import subprocess
@@ -374,29 +375,73 @@ def heartbeat_checker():
                 broadcast_camera_list()
 
 
-def advertise_service():
+def get_local_private_ipv4_addresses():
+    addresses = set()
+    hostname = socket.gethostname()
+
     try:
-        # Get the actual local IP by connecting to an external address
-        # This doesn't actually connect, just determines which interface would be used
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            addresses.add(ip)
+    except socket.gaierror:
+        pass
+
+    try:
+        for addr_info in socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_DGRAM):
+            addresses.add(addr_info[4][0])
+    except socket.gaierror:
+        pass
+
+    private_ips = []
+    fallback_ips = []
+    for ip in addresses:
+        try:
+            parsed = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+
+        if parsed.version != 4 or parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:
+            continue
+
+        if parsed.is_private:
+            private_ips.append(ip)
+        else:
+            fallback_ips.append(ip)
+
+    # Prefer common private LAN ranges so workers pick likely routable addresses first.
+    def sort_key(ip):
+        if ip.startswith("192.168."):
+            return (0, ip)
+        if ip.startswith("10."):
+            return (1, ip)
+        if ip.startswith("172."):
+            return (2, ip)
+        return (3, ip)
+
+    if private_ips:
+        return sorted(private_ips, key=sort_key)
+    return sorted(fallback_ips, key=sort_key)
+
+
+def advertise_service(port):
+    try:
+        local_ips = get_local_private_ipv4_addresses()
+        if not local_ips:
+            raise RuntimeError("No valid local IPv4 address found for mDNS advertisement")
         
         hostname = socket.gethostname()
         
         service_info = ServiceInfo(
             "_grappler._tcp.local.",
             "GrapplerCameraServer._grappler._tcp.local.",
-            addresses=[socket.inet_aton(local_ip)],
-            port=10000,
+            addresses=[socket.inet_aton(ip) for ip in local_ips],
+            port=port,
             properties={'version': '1.0', 'camera_server': 'true'},
             server=f"{hostname}.local."
         )
         
         zeroconf = Zeroconf()
         zeroconf.register_service(service_info)
-        print(f"mDNS service advertised: {local_ip}:10000")
+        print(f"mDNS service advertised on {len(local_ips)} address(es): {', '.join(local_ips)}:{port}")
         
         try:
             while True:
@@ -416,7 +461,7 @@ if __name__ == "__main__":
 
     # Start mDNS advertisement if enabled
     if args.mdns:
-        advertise_thread = threading.Thread(target=advertise_service, daemon=True)
+        advertise_thread = threading.Thread(target=advertise_service, args=(args.port,), daemon=True)
         advertise_thread.start()
     
     # Start heartbeat checker
