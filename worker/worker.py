@@ -4,7 +4,7 @@ import numpy as np
 from PCA9685 import PCA9685
 import socketio
 import base64
-from time import sleep
+from time import sleep, monotonic
 from zeroconf import ServiceBrowser, Zeroconf
 import socket
 import argparse
@@ -15,6 +15,10 @@ CAMERA_ID = socket.gethostname()
 SERVER_IP = None  # discovered via mDNS
 SERVER_CANDIDATES = []
 SERVER_DISCOVERED = False
+
+STREAM_INTERVAL_SECONDS = 1.0 / 10.0
+JPEG_QUALITY = 50
+last_frame_emit_time = 0.0
 
 # servo stuff
 pwm = PCA9685(0x40, debug=False)
@@ -532,8 +536,15 @@ def tracking_loop():
         print("Pose detection stopped.")
 
 def emit_frame(frame, view_score=0.0):
+    global last_frame_emit_time
+
     if sio.connected:
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        now = monotonic()
+        if (now - last_frame_emit_time) < STREAM_INTERVAL_SECONDS:
+            return
+        last_frame_emit_time = now
+
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         frame_base64 = base64.b64encode(buffer).decode('utf-8')
         sio.emit('camera_frame', {
             'camera_id': CAMERA_ID,
@@ -548,7 +559,13 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Grappler Camera Worker")
     argparser.add_argument('--server_ip', type=str, default=None, help='Server IP address')
     argparser.add_argument('--mdns_wait', type=int, default=10, help='mDNS discovery wait time in seconds (default: 10). Only used if --server_ip is not provided.')
+    argparser.add_argument('--stream_fps', type=float, default=10.0, help='Max frame upload FPS to server (default: 10).')
+    argparser.add_argument('--jpeg_quality', type=int, default=50, help='JPEG quality for frame upload, 1-100 (default: 50).')
     args = argparser.parse_args()
+
+    stream_fps = max(1.0, float(args.stream_fps))
+    STREAM_INTERVAL_SECONDS = 1.0 / stream_fps
+    JPEG_QUALITY = max(1, min(100, int(args.jpeg_quality)))
 
     connection_targets = []
 
@@ -583,7 +600,11 @@ if __name__ == "__main__":
         SERVER_IP = connection_targets[target_index % len(connection_targets)]
         try:
             print(f"Connecting to {SERVER_IP}...")
-            sio.connect(SERVER_IP)
+            try:
+                sio.connect(SERVER_IP, transports=['websocket'], wait_timeout=10)
+            except Exception:
+                # Fallback to default transport negotiation if websocket is unavailable.
+                sio.connect(SERVER_IP, wait_timeout=10)
             sio.wait()
         except Exception as e:
             #TODO: Handle exception printing better

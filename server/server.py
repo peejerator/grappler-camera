@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, send_from_directory
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room
 from time import sleep, time
 from datetime import datetime
 import threading
@@ -14,6 +14,8 @@ import argparse
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'multi-camera-secret'
+WEB_CLIENT_ROOM = "web_clients"
+CAMERA_TIMEOUT_SECONDS = float(os.environ.get("CAMERA_TIMEOUT_SECONDS", "20"))
 
 # silence werkzeug request logs for socketio
 class NoSocketIOFilter(logging.Filter):
@@ -28,6 +30,9 @@ socketio = SocketIO(
     app, 
     cors_allowed_origins="*", 
     async_mode='threading',
+    ping_timeout=30,
+    ping_interval=10,
+    max_http_buffer_size=8_000_000,
     logger=False,               # silence socketio logs
     engineio_logger=False       # silence engineio logs
 )
@@ -46,6 +51,17 @@ DEFAULT_CAMERA_PARAMS = {
     'draw_skeleton': True,
     'draw_stats': True
 }
+
+
+def emit_to_web(event_name, payload):
+    socketio.emit(event_name, payload, room=WEB_CLIENT_ROOM)
+
+
+def get_camera_sid(camera_id):
+    for sid, cid in socket_to_camera.items():
+        if cid == camera_id:
+            return sid
+    return None
 
 # recording state
 recordings_dir = os.path.join(os.path.dirname(__file__), "recordings")
@@ -99,7 +115,7 @@ def handle_disconnect():
             stop_recording_internal(camera_id)
         
         # Notify all web clients
-        socketio.emit('camera_disconnected', {'camera_id': camera_id})
+        emit_to_web('camera_disconnected', {'camera_id': camera_id})
         broadcast_camera_list()
 
 @socketio.on('camera_frame')
@@ -113,8 +129,8 @@ def handle_camera_frame(data):
         cameras[camera_id]['connected'] = True
         cameras[camera_id]['view_score'] = view_score
     
-    # Relay frame to all web clients
-    socketio.emit('frame_' + camera_id, {
+    # Relay frame only to UI clients, not worker sockets.
+    emit_to_web('frame_' + camera_id, {
         'image': data['image'],
         'params': data['params'],
         'view_score': view_score
@@ -135,17 +151,21 @@ def handle_update_params(data):
     if camera_id in cameras:
         cameras[camera_id]['params'] = merged_params
     
-    # Send to specific camera
-    socketio.emit(f'update_params_{camera_id}', merged_params)
+    # Send only to the target camera socket.
+    camera_sid = get_camera_sid(camera_id)
+    if camera_sid:
+        socketio.emit(f'update_params_{camera_id}', merged_params, to=camera_sid)
     
     # Broadcast to all web clients
-    socketio.emit('params_updated', {'camera_id': camera_id, 'params': merged_params})
+    emit_to_web('params_updated', {'camera_id': camera_id, 'params': merged_params})
 
 @socketio.on('center_servo')
 def handle_center_servo(data):
     camera_id = data['camera_id']
-    socketio.emit(f'center_servo_{camera_id}')
-    socketio.emit('servo_centered', {'camera_id': camera_id})
+    camera_sid = get_camera_sid(camera_id)
+    if camera_sid:
+        socketio.emit(f'center_servo_{camera_id}', to=camera_sid)
+    emit_to_web('servo_centered', {'camera_id': camera_id})
 
 @socketio.on('move_servo')
 def handle_move_servo(data):
@@ -155,7 +175,7 @@ def handle_move_servo(data):
 
     camera_info = cameras.get(camera_id)
     if camera_info and camera_info.get('params', {}).get('tracking_enabled'):
-        socketio.emit('servo_move_rejected', {
+        emit_to_web('servo_move_rejected', {
             'camera_id': camera_id,
             'reason': 'Tracking is enabled'
         })
@@ -163,14 +183,19 @@ def handle_move_servo(data):
 
     if camera_info:
         camera_info['params']['tracking_enabled'] = False
-        socketio.emit(f'update_params_{camera_id}', camera_info['params'])
-        socketio.emit('params_updated', {'camera_id': camera_id, 'params': camera_info['params']})
+        camera_sid = get_camera_sid(camera_id)
+        if camera_sid:
+            socketio.emit(f'update_params_{camera_id}', camera_info['params'], to=camera_sid)
+        emit_to_web('params_updated', {'camera_id': camera_id, 'params': camera_info['params']})
 
-    socketio.emit(f'move_servo_{camera_id}', {'pan': pan, 'tilt': tilt})
-    socketio.emit('servo_moved', {'camera_id': camera_id, 'pan': pan, 'tilt': tilt})
+    camera_sid = get_camera_sid(camera_id)
+    if camera_sid:
+        socketio.emit(f'move_servo_{camera_id}', {'pan': pan, 'tilt': tilt}, to=camera_sid)
+    emit_to_web('servo_moved', {'camera_id': camera_id, 'pan': pan, 'tilt': tilt})
 
 @socketio.on('get_cameras')
 def handle_get_cameras():
+    join_room(WEB_CLIENT_ROOM)
     camera_list = [
         {
             'camera_id': cid,
@@ -195,7 +220,7 @@ def broadcast_camera_list():
         }
         for cid, info in cameras.items()
     ]
-    socketio.emit('camera_list', camera_list)
+    emit_to_web('camera_list', camera_list)
 
 @socketio.on('start_recording')
 def handle_start_recording(data):
@@ -206,7 +231,7 @@ def handle_start_recording(data):
 
     with recording_lock:
         if camera_id in recording_sessions or camera_id in recording_requests:
-            emit('recording_error', {'camera_id': camera_id, 'error': 'Already recording'})
+            emit_to_web('recording_error', {'camera_id': camera_id, 'error': 'Already recording'})
             return
         recording_requests[camera_id] = {
             'frames': [],
@@ -214,7 +239,7 @@ def handle_start_recording(data):
         }
         cameras[camera_id]['recording'] = True
 
-    socketio.emit('recording_started', {'camera_id': camera_id})
+    emit_to_web('recording_started', {'camera_id': camera_id})
     broadcast_camera_list()
 
 @socketio.on('stop_recording')
@@ -222,7 +247,7 @@ def handle_stop_recording(data):
     camera_id = data['camera_id']
     path, filename = stop_recording_internal(camera_id)
     download_url = f"/recordings/{filename}" if filename else None
-    socketio.emit('recording_stopped', {
+    emit_to_web('recording_stopped', {
         'camera_id': camera_id,
         'path': path,
         'filename': filename,
@@ -298,7 +323,7 @@ def write_recording_frame(camera_id, image_bytes):
                 recording_requests.pop(camera_id, None)
                 if camera_id in cameras:
                     cameras[camera_id]['recording'] = False
-                socketio.emit('recording_error', {
+                emit_to_web('recording_error', {
                     'camera_id': camera_id,
                     'error': 'ffmpeg not available on server'
                 })
@@ -365,13 +390,13 @@ def heartbeat_checker():
         # Check every 5 seconds
         sleep(5)
         now = time()
-        for camera_id, info in cameras.items():
-            # If no frame received in last 10 seconds, mark as disconnected
-            if info['connected'] and (now - info['last_seen']) > 10:
+        for camera_id, info in list(cameras.items()):
+            # If no frame received recently, mark camera as disconnected.
+            if info['connected'] and (now - info['last_seen']) > CAMERA_TIMEOUT_SECONDS:
                 info['connected'] = False
                 print(f"Camera timeout: {camera_id}")
                 stop_recording_internal(camera_id)
-                socketio.emit('camera_disconnected', {'camera_id': camera_id})
+                emit_to_web('camera_disconnected', {'camera_id': camera_id})
                 broadcast_camera_list()
 
 
